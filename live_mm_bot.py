@@ -476,12 +476,12 @@ class KalshiAPIClient:
             print(f"❌ Failed to get positions: {e}")
             return []
 
-    def get_active_markets(self, series_ticker: str = "NHL", status: str = "open", limit: int = 100) -> List[Dict]:
+    def get_active_markets(self, series_ticker: str = "KXNHLGAME", status: str = "open", limit: int = 100) -> List[Dict]:
         """
         Get active markets from Kalshi.
 
         Args:
-            series_ticker: Series to filter (e.g., "NHL", "NFL", "NBA")
+            series_ticker: Series to filter (e.g., "KXNHLGAME", "KXNFLGAME", etc.)
             status: Market status ("open", "closed", etc.)
             limit: Max markets to return
 
@@ -501,21 +501,34 @@ class KalshiAPIClient:
 
             headers = self._get_signed_headers("GET", path)
 
+            print(f"🔍 Fetching markets: {self.base_url}/markets?{query_string}")
+
             response = self.session.get(
                 f"{self.base_url}/markets",
                 headers=headers,
                 params=params
             )
+
+            print(f"📡 API Response: status={response.status_code}")
+
             response.raise_for_status()
 
             data = response.json()
             markets = data.get("markets", [])
 
             print(f"📊 Found {len(markets)} {series_ticker} markets")
+
+            if len(markets) == 0:
+                print(f"⚠️ Response data keys: {list(data.keys())}")
+                print(f"⚠️ Full response: {data}")
+
             return markets
 
         except Exception as e:
             print(f"❌ Failed to get markets: {e}")
+            if hasattr(e, 'response') and e.response:
+                print(f"   Status: {e.response.status_code}")
+                print(f"   Response: {e.response.text[:500]}")
             return []
 
     def connect_websocket(self, market_ticker: str, on_trade_callback):

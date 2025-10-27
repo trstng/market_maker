@@ -18,7 +18,7 @@ class Settings:
         self.base_spread: float = float(os.getenv('BASE_SPREAD', '0.01'))
         self.size_per_fill: int = int(os.getenv('SIZE_PER_FILL', '10'))
         self.max_inventory_value: int = int(os.getenv('MAX_INVENTORY_VALUE', '100'))
-        self.series_ticker: str = os.getenv('SERIES_TICKER', 'NHL')
+        self.series_ticker: str = os.getenv('SERIES_TICKER', 'KXNHLGAME')
 
         # Additional bot parameters
         self.queue_share: float = float(os.getenv('QUEUE_SHARE', '0.20'))
