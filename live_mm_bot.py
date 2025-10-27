@@ -529,6 +529,11 @@ class KalshiAPIClient:
         ws_path = "/trade-api/ws/v2"
         headers = self._get_signed_headers("GET", ws_path)
 
+        print(f"🔐 WebSocket headers: {list(headers.keys())}")
+        print(f"   Timestamp: {headers.get('KALSHI-ACCESS-TIMESTAMP')}")
+        print(f"   Key: {headers.get('KALSHI-ACCESS-KEY')[:20]}...")
+        print(f"   Signature (first 50 chars): {headers.get('KALSHI-ACCESS-SIGNATURE')[:50]}...")
+
         # Create WebSocket connection with signed headers
         # Note: websocket-client expects headers as a dict or list of tuples
         self.ws = websocket.WebSocketApp(
