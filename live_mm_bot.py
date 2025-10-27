@@ -690,7 +690,7 @@ class LiveMarketMaker:
         Args:
             trade: Dictionary with keys: timestamp, price, taker_side, count
         """
-        timestamp = trade['timestamp']
+        timestamp = trade.get('timestamp', int(time.time()))
         price = trade.get('price')
         taker_side = trade.get('taker_side')
         trade_size = trade.get('count', 10)
