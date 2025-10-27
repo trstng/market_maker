@@ -500,17 +500,28 @@ class KalshiAPIClient:
                     self.ws_connected = True
                     print(f"✅ WebSocket connected")
 
-                    # Subscribe to market ticker and trades
-                    subscribe_msg = {
+                    # First: Subscribe to global ticker channel (for all markets)
+                    ticker_msg = {
                         "id": 1,
+                        "cmd": "subscribe",
+                        "params": {
+                            "channels": ["ticker"]  # Global ticker - no market_ticker param
+                        }
+                    }
+                    await websocket.send(json.dumps(ticker_msg))
+                    print(f"📡 Subscribed to global ticker")
+
+                    # Second: Subscribe to market-specific trades and orderbook
+                    market_msg = {
+                        "id": 2,
                         "cmd": "subscribe",
                         "params": {
                             "channels": ["orderbook_delta", "trade"],
                             "market_ticker": market_ticker
                         }
                     }
-                    await websocket.send(json.dumps(subscribe_msg))
-                    print(f"📡 Subscribed to {market_ticker}")
+                    await websocket.send(json.dumps(market_msg))
+                    print(f"📡 Subscribed to {market_ticker} (trades & orderbook)")
 
                     # Listen for messages
                     async for message in websocket:
