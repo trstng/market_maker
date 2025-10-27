@@ -476,6 +476,48 @@ class KalshiAPIClient:
             print(f"❌ Failed to get positions: {e}")
             return []
 
+    def get_active_markets(self, series_ticker: str = "NHL", status: str = "open", limit: int = 100) -> List[Dict]:
+        """
+        Get active markets from Kalshi.
+
+        Args:
+            series_ticker: Series to filter (e.g., "NHL", "NFL", "NBA")
+            status: Market status ("open", "closed", etc.)
+            limit: Max markets to return
+
+        Returns:
+            List of market dicts with ticker, title, volume, etc.
+        """
+        try:
+            params = {
+                "limit": limit,
+                "status": status,
+                "series_ticker": series_ticker
+            }
+
+            # Build query string and path for signature
+            query_string = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
+            path = f"/markets?{query_string}"
+
+            headers = self._get_signed_headers("GET", path)
+
+            response = self.session.get(
+                f"{self.base_url}/markets",
+                headers=headers,
+                params=params
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            markets = data.get("markets", [])
+
+            print(f"📊 Found {len(markets)} {series_ticker} markets")
+            return markets
+
+        except Exception as e:
+            print(f"❌ Failed to get markets: {e}")
+            return []
+
     def connect_websocket(self, market_ticker: str, on_trade_callback):
         """Connect to Kalshi WebSocket for real-time market data using async websockets."""
         self.on_trade_callback = on_trade_callback
@@ -853,19 +895,45 @@ def main():
 
     config = BotConfig()
 
-    # Get market ticker from environment or use example
-    market_ticker = os.getenv('MARKET_TICKER', 'KXNHLGAME-25OCT30EXAMPLE-TEAM')
-
     print("="*80)
     print("LIVE MARKET MAKING BOT - NHL EDITION")
     print("="*80)
-    print(f"Market: {market_ticker}")
     print(f"Series: {config.SERIES_TICKER}")
     print(f"Base URL: {config.KALSHI_BASE_URL}")
     print(f"Policy: Duration-Weighted (limit={config.DURATION_WEIGHTED_LIMIT}) + MAE Failsafe ({config.MAE_FAILSAFE_CENTS}¢, {config.MAE_ACTIVATION_WINDOW_SEC}s)")
     print(f"Parameters: {config.SIZE_PER_FILL} contracts/fill, ${config.MAX_INVENTORY_VALUE} max inventory")
     print("="*80)
     print()
+
+    # Auto-discover markets or use manual override
+    market_ticker = os.getenv('MARKET_TICKER')
+
+    if not market_ticker or market_ticker == 'auto':
+        print("🔍 Auto-discovering active markets...")
+
+        # Create temporary API client for market discovery
+        temp_client = KalshiAPIClient(config)
+        markets = temp_client.get_active_markets(series_ticker=config.SERIES_TICKER, limit=10)
+
+        if not markets:
+            print("❌ No active markets found!")
+            return
+
+        # Sort by volume (most active first)
+        markets_sorted = sorted(markets, key=lambda x: x.get('volume', 0), reverse=True)
+
+        print(f"\n📊 Top {min(5, len(markets_sorted))} Active Markets:")
+        for i, m in enumerate(markets_sorted[:5]):
+            print(f"  {i+1}. {m.get('ticker')} - Vol: {m.get('volume', 0)} - {m.get('title', 'N/A')[:60]}")
+
+        # Use most active market
+        market_ticker = markets_sorted[0]['ticker']
+        print(f"\n✅ Selected most active market: {market_ticker}")
+        print(f"   Volume: {markets_sorted[0].get('volume', 0)}")
+        print(f"   Title: {markets_sorted[0].get('title', 'N/A')}")
+        print()
+    else:
+        print(f"📍 Using manual market: {market_ticker}\n")
 
     # Initialize bot
     try:
