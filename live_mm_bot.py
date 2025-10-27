@@ -16,8 +16,9 @@ from datetime import datetime
 import statistics
 import math
 from typing import Optional, Dict, List, Tuple
-import websocket
-import requests
+import asyncio
+import websockets
+import httpx
 import threading
 import base64
 from cryptography.hazmat.primitives import hashes, serialization
@@ -322,11 +323,12 @@ class KalshiAPIClient:
         self.api_key = config.KALSHI_API_KEY
         self.api_secret = config.KALSHI_API_SECRET
 
-        self.session = requests.Session()
+        self.session = httpx.Client(timeout=30.0)
         self.private_key = None
-        self.ws: Optional[websocket.WebSocketApp] = None
+        self.ws = None
         self.ws_thread: Optional[threading.Thread] = None
         self.ws_connected = False
+        self.ws_loop = None
 
         # Message handler
         self.on_trade_callback = None
@@ -423,7 +425,7 @@ class KalshiAPIClient:
 
             response = self.session.post(
                 f"{self.base_url}{path}",
-                data=body,
+                content=body,
                 headers=headers
             )
             response.raise_for_status()
@@ -475,88 +477,89 @@ class KalshiAPIClient:
             return []
 
     def connect_websocket(self, market_ticker: str, on_trade_callback):
-        """Connect to Kalshi WebSocket for real-time market data."""
+        """Connect to Kalshi WebSocket for real-time market data using async websockets."""
         self.on_trade_callback = on_trade_callback
 
-        def on_message(ws_app, message):
+        async def ws_handler():
+            """Async WebSocket handler."""
             try:
-                data = json.loads(message)
-                msg_type = data.get("type")
+                # Get signed headers for WebSocket
+                ws_path = "/trade-api/ws/v2"
+                headers = self._get_signed_headers("GET", ws_path)
 
-                if msg_type == "trade":
-                    # Process trade event
-                    trade_data = data.get("msg", {})
-                    if self.on_trade_callback:
-                        self.on_trade_callback(trade_data)
+                print(f"🔐 Connecting to WebSocket with signed headers...")
+                print(f"   URL: {self.ws_url}")
 
-                elif msg_type == "ticker":
-                    # Process ticker update
-                    ticker_data = data.get("msg", {})
-                    # Could process price updates here
-                    pass
+                # Connect with extra_headers (websockets library format)
+                async with websockets.connect(
+                    self.ws_url,
+                    extra_headers=headers,
+                    ping_interval=20,
+                    ping_timeout=60
+                ) as websocket:
+                    self.ws_connected = True
+                    print(f"✅ WebSocket connected")
 
-                elif msg_type == "subscribed":
-                    print(f"✅ Subscription confirmed: {data}")
+                    # Subscribe to market ticker and trades
+                    subscribe_msg = {
+                        "id": 1,
+                        "cmd": "subscribe",
+                        "params": {
+                            "channels": ["orderbook_delta", "trade"],
+                            "market_ticker": market_ticker
+                        }
+                    }
+                    await websocket.send(json.dumps(subscribe_msg))
+                    print(f"📡 Subscribed to {market_ticker}")
+
+                    # Listen for messages
+                    async for message in websocket:
+                        try:
+                            data = json.loads(message)
+                            msg_type = data.get("type")
+
+                            if msg_type == "trade":
+                                # Process trade event
+                                trade_data = data.get("msg", {})
+                                if self.on_trade_callback:
+                                    self.on_trade_callback(trade_data)
+
+                            elif msg_type == "ticker":
+                                # Process ticker update
+                                pass
+
+                            elif msg_type == "subscribed":
+                                print(f"✅ Subscription confirmed")
+
+                        except json.JSONDecodeError as e:
+                            print(f"❌ JSON decode error: {e}")
+
+            except websockets.exceptions.WebSocketException as e:
+                print(f"❌ WebSocket error: {e}")
+                self.ws_connected = False
 
             except Exception as e:
-                print(f"❌ Error processing WebSocket message: {e}")
+                print(f"❌ Unexpected WebSocket error: {e}")
+                self.ws_connected = False
 
-        def on_error(ws_app, error):
-            print(f"❌ WebSocket error: {error}")
-            self.ws_connected = False
-
-        def on_close(ws_app, close_status_code, close_msg):
-            print(f"⚠️ WebSocket closed: {close_status_code} - {close_msg}")
-            self.ws_connected = False
-
-        def on_open(ws_app):
-            print(f"✅ WebSocket connected")
-            self.ws_connected = True
-
-            # Subscribe to market ticker and trades
-            subscribe_msg = {
-                "id": 1,
-                "cmd": "subscribe",
-                "params": {
-                    "channels": ["orderbook_delta", "trade"],
-                    "market_ticker": market_ticker
-                }
-            }
-            ws_app.send(json.dumps(subscribe_msg))
-            print(f"📡 Subscribed to {market_ticker}")
-
-        # Get signed headers for WebSocket
-        ws_path = "/trade-api/ws/v2"
-        headers = self._get_signed_headers("GET", ws_path)
-
-        print(f"🔐 WebSocket headers: {list(headers.keys())}")
-        print(f"   Timestamp: {headers.get('KALSHI-ACCESS-TIMESTAMP')}")
-        print(f"   Key: {headers.get('KALSHI-ACCESS-KEY')[:20]}...")
-        print(f"   Signature (first 50 chars): {headers.get('KALSHI-ACCESS-SIGNATURE')[:50]}...")
-
-        # Create WebSocket connection with signed headers
-        # Note: websocket-client expects headers as a dict or list of tuples
-        self.ws = websocket.WebSocketApp(
-            self.ws_url,
-            header=headers,  # Pass dict directly
-            on_open=on_open,
-            on_message=on_message,
-            on_error=on_error,
-            on_close=on_close
-        )
+        def run_async_ws():
+            """Run async WebSocket in a thread."""
+            self.ws_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.ws_loop)
+            self.ws_loop.run_until_complete(ws_handler())
 
         # Run WebSocket in separate thread
-        self.ws_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
+        self.ws_thread = threading.Thread(target=run_async_ws, daemon=True)
         self.ws_thread.start()
 
         print(f"🚀 WebSocket thread started")
 
     def disconnect_websocket(self):
         """Disconnect from WebSocket."""
-        if self.ws:
-            self.ws.close()
-            self.ws_connected = False
-            print(f"🔌 WebSocket disconnected")
+        self.ws_connected = False
+        if self.ws_loop:
+            self.ws_loop.stop()
+        print(f"🔌 WebSocket disconnected")
 
 
 # ============================================================================
