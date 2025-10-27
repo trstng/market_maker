@@ -490,10 +490,10 @@ class KalshiAPIClient:
                 print(f"🔐 Connecting to WebSocket with signed headers...")
                 print(f"   URL: {self.ws_url}")
 
-                # Connect with extra_headers (websockets library format)
+                # Connect with additional_headers (newer websockets API)
                 async with websockets.connect(
                     self.ws_url,
-                    extra_headers=headers,
+                    additional_headers=headers,
                     ping_interval=20,
                     ping_timeout=60
                 ) as websocket:
