@@ -529,10 +529,11 @@ class KalshiAPIClient:
         ws_path = "/trade-api/ws/v2"
         headers = self._get_signed_headers("GET", ws_path)
 
-        # Create WebSocket connection
+        # Create WebSocket connection with signed headers
+        # Note: websocket-client expects headers as a dict or list of tuples
         self.ws = websocket.WebSocketApp(
             self.ws_url,
-            header=[f"{k}: {v}" for k, v in headers.items()],
+            header=headers,  # Pass dict directly
             on_open=on_open,
             on_message=on_message,
             on_error=on_error,
