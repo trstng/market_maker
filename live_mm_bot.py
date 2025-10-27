@@ -20,10 +20,12 @@ import websocket
 import requests
 import threading
 import base64
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.backends import default_backend
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from supabase import create_client
 from config.settings import settings
 
 # ============================================================================
@@ -33,18 +35,13 @@ from config.settings import settings
 class BotConfig:
     """Bot configuration - edit these values"""
 
-    # Supabase connection
-    SUPABASE_URL = settings.supabase_url
-    SUPABASE_KEY = settings.supabase_key
-
     # Kalshi API connection
     KALSHI_API_KEY = settings.kalshi_api_key
     KALSHI_API_SECRET = settings.kalshi_api_secret
-    KALSHI_ENVIRONMENT = settings.kalshi_environment
+    KALSHI_BASE_URL = settings.kalshi_base_url
 
-    # Kalshi API URLs
-    KALSHI_API_BASE = "https://api.elections.kalshi.com" if settings.kalshi_environment == "production" else "https://demo-api.kalshi.co"
-    KALSHI_WS_URL = "wss://api.elections.kalshi.com/trade-api/ws/v2" if settings.kalshi_environment == "production" else "wss://demo-api.kalshi.co/trade-api/ws/v2"
+    # Kalshi WebSocket URL (derived from base URL)
+    KALSHI_WS_URL = settings.kalshi_base_url.replace("https://", "wss://").replace("/trade-api/v2", "/trade-api/ws/v2")
 
     # Trading parameters
     BASE_SPREAD = settings.base_spread
@@ -316,17 +313,17 @@ class HybridRiskPolicy:
 # ============================================================================
 
 class KalshiAPIClient:
-    """Client for Kalshi REST API and WebSocket."""
+    """Client for Kalshi REST API and WebSocket with RSA signature-based auth."""
 
     def __init__(self, config: BotConfig):
         self.config = config
-        self.base_url = config.KALSHI_API_BASE
+        self.base_url = config.KALSHI_BASE_URL
         self.ws_url = config.KALSHI_WS_URL
         self.api_key = config.KALSHI_API_KEY
         self.api_secret = config.KALSHI_API_SECRET
 
         self.session = requests.Session()
-        self.auth_token: Optional[str] = None
+        self.private_key = None
         self.ws: Optional[websocket.WebSocketApp] = None
         self.ws_thread: Optional[threading.Thread] = None
         self.ws_connected = False
@@ -334,34 +331,64 @@ class KalshiAPIClient:
         # Message handler
         self.on_trade_callback = None
 
-        # Authenticate
-        self._authenticate()
+        # Load private key
+        self._load_private_key()
 
-    def _authenticate(self):
-        """Authenticate with Kalshi API to get token."""
+    def _load_private_key(self):
+        """Load RSA private key from settings."""
         try:
-            url = f"{self.base_url}/trade-api/v2/login"
-            response = self.session.post(
-                url,
-                json={
-                    "email": self.api_key,
-                    "password": self.api_secret
-                },
-                headers={"Content-Type": "application/json"}
+            # Handle both actual newlines and escaped \n sequences
+            key_string = self.api_secret
+            if '\\n' in key_string:
+                key_string = key_string.replace('\\n', '\n')
+
+            key_bytes = key_string.encode('utf-8')
+            self.private_key = serialization.load_pem_private_key(
+                key_bytes,
+                password=None,
+                backend=default_backend()
             )
-            response.raise_for_status()
+            print(f"✅ Private key loaded successfully")
+        except Exception as e:
+            print(f"❌ Failed to load private key: {e}")
+            print(f"   Key preview: {self.api_secret[:50] if self.api_secret else 'None'}...")
+            raise
 
-            data = response.json()
-            self.auth_token = data.get("token")
+    def _create_signature(self, timestamp: str, method: str, path: str, body: str = "") -> str:
+        """Create RSA-PSS signature for API request."""
+        if not self.private_key:
+            return ""
 
-            if self.auth_token:
-                print(f"✅ Authenticated with Kalshi API")
-            else:
-                print(f"⚠️ Authentication response missing token")
+        try:
+            # Message format: timestamp + method + path + body
+            message = f"{timestamp}{method}{path}{body}"
+
+            # Sign using RSA-PSS
+            signature = self.private_key.sign(
+                message.encode('utf-8'),
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.DIGEST_LENGTH
+                ),
+                hashes.SHA256()
+            )
+
+            return base64.b64encode(signature).decode('utf-8')
 
         except Exception as e:
-            print(f"❌ Failed to authenticate: {e}")
-            raise
+            print(f"❌ Signature creation failed: {e}")
+            return ""
+
+    def _get_signed_headers(self, method: str, path: str, body: str = "") -> Dict[str, str]:
+        """Get headers with RSA signature."""
+        timestamp = str(int(time.time() * 1000))
+        signature = self._create_signature(timestamp, method, path, body)
+
+        return {
+            "KALSHI-ACCESS-KEY": self.api_key,
+            "KALSHI-ACCESS-SIGNATURE": signature,
+            "KALSHI-ACCESS-TIMESTAMP": timestamp
+        }
 
     def place_order(self, market_ticker: str, side: str, action: str, count: int, price_cents: int) -> Optional[Dict]:
         """
@@ -378,8 +405,7 @@ class KalshiAPIClient:
             Order response dict or None if failed
         """
         try:
-            url = f"{self.base_url}/trade-api/v2/portfolio/orders"
-
+            path = "/portfolio/orders"
             payload = {
                 "ticker": market_ticker,
                 "client_order_id": f"{int(time.time()*1000)}",
@@ -391,13 +417,14 @@ class KalshiAPIClient:
                 "no_price": price_cents if side == "no" else None
             }
 
+            body = json.dumps(payload)
+            headers = self._get_signed_headers("POST", path, body)
+            headers["Content-Type"] = "application/json"
+
             response = self.session.post(
-                url,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self.auth_token}",
-                    "Content-Type": "application/json"
-                }
+                f"{self.base_url}{path}",
+                data=body,
+                headers=headers
             )
             response.raise_for_status()
 
@@ -412,11 +439,12 @@ class KalshiAPIClient:
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an order."""
         try:
-            url = f"{self.base_url}/trade-api/v2/portfolio/orders/{order_id}"
+            path = f"/portfolio/orders/{order_id}"
+            headers = self._get_signed_headers("DELETE", path)
 
             response = self.session.delete(
-                url,
-                headers={"Authorization": f"Bearer {self.auth_token}"}
+                f"{self.base_url}{path}",
+                headers=headers
             )
             response.raise_for_status()
 
@@ -430,11 +458,12 @@ class KalshiAPIClient:
     def get_positions(self) -> List[Dict]:
         """Get current positions."""
         try:
-            url = f"{self.base_url}/trade-api/v2/portfolio/positions"
+            path = "/portfolio/positions"
+            headers = self._get_signed_headers("GET", path)
 
             response = self.session.get(
-                url,
-                headers={"Authorization": f"Bearer {self.auth_token}"}
+                f"{self.base_url}{path}",
+                headers=headers
             )
             response.raise_for_status()
 
@@ -449,7 +478,7 @@ class KalshiAPIClient:
         """Connect to Kalshi WebSocket for real-time market data."""
         self.on_trade_callback = on_trade_callback
 
-        def on_message(ws, message):
+        def on_message(ws_app, message):
             try:
                 data = json.loads(message)
                 msg_type = data.get("type")
@@ -460,42 +489,50 @@ class KalshiAPIClient:
                     if self.on_trade_callback:
                         self.on_trade_callback(trade_data)
 
-                elif msg_type == "orderbook_snapshot":
-                    # Could process orderbook updates here
+                elif msg_type == "ticker":
+                    # Process ticker update
+                    ticker_data = data.get("msg", {})
+                    # Could process price updates here
                     pass
+
+                elif msg_type == "subscribed":
+                    print(f"✅ Subscription confirmed: {data}")
 
             except Exception as e:
                 print(f"❌ Error processing WebSocket message: {e}")
 
-        def on_error(ws, error):
+        def on_error(ws_app, error):
             print(f"❌ WebSocket error: {error}")
             self.ws_connected = False
 
-        def on_close(ws, close_status_code, close_msg):
+        def on_close(ws_app, close_status_code, close_msg):
             print(f"⚠️ WebSocket closed: {close_status_code} - {close_msg}")
             self.ws_connected = False
 
-        def on_open(ws):
+        def on_open(ws_app):
             print(f"✅ WebSocket connected")
             self.ws_connected = True
 
-            # Subscribe to market ticker
+            # Subscribe to market ticker and trades
             subscribe_msg = {
                 "id": 1,
                 "cmd": "subscribe",
                 "params": {
-                    "channels": [f"ticker:{market_ticker}"]
+                    "channels": ["orderbook_delta", "trade"],
+                    "market_ticker": market_ticker
                 }
             }
-            ws.send(json.dumps(subscribe_msg))
+            ws_app.send(json.dumps(subscribe_msg))
             print(f"📡 Subscribed to {market_ticker}")
+
+        # Get signed headers for WebSocket
+        ws_path = "/trade-api/ws/v2"
+        headers = self._get_signed_headers("GET", ws_path)
 
         # Create WebSocket connection
         self.ws = websocket.WebSocketApp(
             self.ws_url,
-            header={
-                "Authorization": f"Bearer {self.auth_token}"
-            },
+            header=[f"{k}: {v}" for k, v in headers.items()],
             on_open=on_open,
             on_message=on_message,
             on_error=on_error,
@@ -533,9 +570,6 @@ class LiveMarketMaker:
 
         # Kalshi API client
         self.kalshi_client = KalshiAPIClient(config)
-
-        # Supabase connection
-        self.supabase = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
 
         # Trading state
         self.inventory = InventoryState()
@@ -777,10 +811,8 @@ def main():
     except ValueError as e:
         print(f"❌ Configuration Error: {e}")
         print("\nPlease set the required environment variables:")
-        print("  - SUPABASE_URL")
-        print("  - SUPABASE_KEY")
-        print("  - KALSHI_API_KEY")
-        print("  - KALSHI_API_SECRET")
+        print("  - KALSHI_API_KEY (your email)")
+        print("  - KALSHI_API_SECRET (your RSA private key)")
         print("\nSee .env.example for reference.")
         return
 
@@ -794,7 +826,7 @@ def main():
     print("="*80)
     print(f"Market: {market_ticker}")
     print(f"Series: {config.SERIES_TICKER}")
-    print(f"Environment: {config.KALSHI_ENVIRONMENT}")
+    print(f"Base URL: {config.KALSHI_BASE_URL}")
     print(f"Policy: Duration-Weighted (limit={config.DURATION_WEIGHTED_LIMIT}) + MAE Failsafe ({config.MAE_FAILSAFE_CENTS}¢, {config.MAE_ACTIVATION_WINDOW_SEC}s)")
     print(f"Parameters: {config.SIZE_PER_FILL} contracts/fill, ${config.MAX_INVENTORY_VALUE} max inventory")
     print("="*80)

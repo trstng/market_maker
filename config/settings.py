@@ -6,14 +6,10 @@ class Settings:
     """Bot settings loaded from environment variables"""
 
     def __init__(self):
-        # Supabase Configuration
-        self.supabase_url: str = os.getenv('SUPABASE_URL', '')
-        self.supabase_key: str = os.getenv('SUPABASE_KEY', '')
-
         # Kalshi API Configuration
         self.kalshi_api_key: str = os.getenv('KALSHI_API_KEY', '')
         self.kalshi_api_secret: str = os.getenv('KALSHI_API_SECRET', '')
-        self.kalshi_environment: str = os.getenv('KALSHI_ENVIRONMENT', 'production')
+        self.kalshi_base_url: str = os.getenv('KALSHI_BASE_URL', 'https://trading-api.kalshi.com/trade-api/v2')
 
         # Trading Parameters (with backtest defaults)
         self.duration_weighted_limit: int = int(os.getenv('DURATION_WEIGHTED_LIMIT', '500'))
@@ -32,10 +28,6 @@ class Settings:
         """Validate that required settings are present"""
         errors = []
 
-        if not self.supabase_url:
-            errors.append("SUPABASE_URL is required")
-        if not self.supabase_key:
-            errors.append("SUPABASE_KEY is required")
         if not self.kalshi_api_key:
             errors.append("KALSHI_API_KEY is required")
         if not self.kalshi_api_secret:
@@ -47,7 +39,7 @@ class Settings:
         return True
 
     def __repr__(self):
-        return f"<Settings series={self.series_ticker} env={self.kalshi_environment}>"
+        return f"<Settings series={self.series_ticker} base_url={self.kalshi_base_url}>"
 
 
 # Global settings instance
