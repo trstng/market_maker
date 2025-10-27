@@ -9,7 +9,7 @@ class Settings:
         # Kalshi API Configuration
         self.kalshi_api_key: str = os.getenv('KALSHI_API_KEY', '')
         self.kalshi_api_secret: str = os.getenv('KALSHI_API_SECRET', '')
-        self.kalshi_base_url: str = os.getenv('KALSHI_BASE_URL', 'https://trading-api.kalshi.com/trade-api/v2')
+        self.kalshi_base_url: str = os.getenv('KALSHI_BASE_URL', 'https://api.elections.kalshi.com/trade-api/v2')
 
         # Trading Parameters (with backtest defaults)
         self.duration_weighted_limit: int = int(os.getenv('DURATION_WEIGHTED_LIMIT', '500'))
