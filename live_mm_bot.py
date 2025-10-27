@@ -533,17 +533,33 @@ class KalshiAPIClient:
                             print(f"🔍 WS Message: type={msg_type}, keys={list(data.keys())}")
 
                             if msg_type == "trade":
-                                # Process trade event
+                                # Process trade event (actual trade execution)
                                 trade_data = data.get("msg", {})
                                 print(f"💰 TRADE: {trade_data}")
                                 if self.on_trade_callback:
                                     self.on_trade_callback(trade_data)
 
                             elif msg_type == "ticker":
-                                # Process ticker update
+                                # Process ticker update (price changes)
                                 ticker_data = data.get("msg", {})
                                 ticker_market = ticker_data.get("market_ticker", "unknown")
-                                print(f"📊 TICKER: market={ticker_market}, price={ticker_data.get('price')}")
+
+                                # Only process if it's our market
+                                if ticker_market.lower() == market_ticker.lower():
+                                    print(f"📊 TICKER UPDATE: market={ticker_market}, price={ticker_data.get('price')}, yes_bid={ticker_data.get('yes_bid')}, yes_ask={ticker_data.get('yes_ask')}")
+
+                                    # Convert ticker to trade-like event for bot processing
+                                    # Use timestamp and price from ticker
+                                    trade_event = {
+                                        'timestamp': ticker_data.get('ts', int(time.time())),
+                                        'price': ticker_data.get('price'),
+                                        'taker_side': 'yes',  # Assume yes side for price updates
+                                        'count': 1,  # Ticker doesn't have size, use 1
+                                        'market_ticker': ticker_market
+                                    }
+
+                                    if self.on_trade_callback and trade_event['price']:
+                                        self.on_trade_callback(trade_event)
 
                             elif msg_type == "subscribed":
                                 print(f"✅ Subscription confirmed: {data}")
