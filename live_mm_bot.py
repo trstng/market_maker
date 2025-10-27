@@ -529,18 +529,24 @@ class KalshiAPIClient:
                             data = json.loads(message)
                             msg_type = data.get("type")
 
+                            # DEBUG: Log all message types
+                            print(f"🔍 WS Message: type={msg_type}, keys={list(data.keys())}")
+
                             if msg_type == "trade":
                                 # Process trade event
                                 trade_data = data.get("msg", {})
+                                print(f"💰 TRADE: {trade_data}")
                                 if self.on_trade_callback:
                                     self.on_trade_callback(trade_data)
 
                             elif msg_type == "ticker":
                                 # Process ticker update
-                                pass
+                                ticker_data = data.get("msg", {})
+                                ticker_market = ticker_data.get("market_ticker", "unknown")
+                                print(f"📊 TICKER: market={ticker_market}, price={ticker_data.get('price')}")
 
                             elif msg_type == "subscribed":
-                                print(f"✅ Subscription confirmed")
+                                print(f"✅ Subscription confirmed: {data}")
 
                         except json.JSONDecodeError as e:
                             print(f"❌ JSON decode error: {e}")
