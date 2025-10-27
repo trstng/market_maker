@@ -932,50 +932,41 @@ def main():
             print("❌ No active markets found!")
             return
 
-        # Filter for markets closing soon (within next 6 hours)
-        from datetime import datetime, timedelta
-        now = datetime.now()
-        cutoff = now + timedelta(hours=6)
+        # Filter for today's games by parsing ticker date
+        # Ticker format: KXNHLGAME-25OCT27... or KXNHLGAME-25OCT28...
+        from datetime import datetime
+        today = datetime.now()
+        today_str = today.strftime("%y%b%d").upper()  # e.g., "25OCT27"
 
-        markets_soon = []
+        print(f"🗓️  Filtering for today's date: {today_str}")
+
+        markets_today = []
         for m in markets:
-            close_time_str = m.get('close_time')
-            if close_time_str:
-                try:
-                    # Parse ISO format: 2025-10-28T00:30:00Z
-                    close_time = datetime.fromisoformat(close_time_str.replace('Z', '+00:00'))
-                    # Convert to naive datetime for comparison
-                    close_time_naive = close_time.replace(tzinfo=None)
+            ticker = m.get('ticker', '')
+            if today_str in ticker:
+                markets_today.append(m)
 
-                    if close_time_naive <= cutoff:
-                        markets_soon.append(m)
-                except:
-                    # If parsing fails, include it anyway
-                    markets_soon.append(m)
-            else:
-                # No close time, include it
-                markets_soon.append(m)
-
-        if not markets_soon:
-            print("❌ No markets closing within the next 6 hours!")
+        if not markets_today:
+            print(f"❌ No markets found for today ({today_str})!")
+            print(f"   Available dates in tickers:")
+            for m in markets[:5]:
+                print(f"   - {m.get('ticker', 'N/A')}")
             return
 
-        print(f"🕐 Filtered to {len(markets_soon)} markets closing within 6 hours")
+        print(f"🕐 Filtered to {len(markets_today)} markets for today")
 
         # Sort by volume (most active first)
-        markets_sorted = sorted(markets_soon, key=lambda x: x.get('volume', 0), reverse=True)
+        markets_sorted = sorted(markets_today, key=lambda x: x.get('volume', 0), reverse=True)
 
         print(f"\n📊 Top {min(5, len(markets_sorted))} Active Markets:")
         for i, m in enumerate(markets_sorted[:5]):
-            close_time = m.get('close_time', 'Unknown')
-            print(f"  {i+1}. {m.get('ticker')} - Vol: {m.get('volume', 0)} - Close: {close_time}")
+            print(f"  {i+1}. {m.get('ticker')} - Vol: {m.get('volume', 0)}")
 
         # Use most active market
         market_ticker = markets_sorted[0]['ticker']
         print(f"\n✅ Selected most active market: {market_ticker}")
         print(f"   Volume: {markets_sorted[0].get('volume', 0)}")
         print(f"   Title: {markets_sorted[0].get('title', 'N/A')}")
-        print(f"   Close Time: {markets_sorted[0].get('close_time', 'Unknown')}")
         print()
     else:
         print(f"📍 Using manual market: {market_ticker}\n")
