@@ -315,6 +315,13 @@ class MultiMarketMaker:
                 fills = result.get('fills', [])
                 cursor = result.get('cursor')
 
+                # DEBUG: Log fills API response
+                if fills:
+                    print(f"🔍 DEBUG: Received {len(fills)} fills from API")
+                    if len(fills) > 0:
+                        first_fill = fills[0]
+                        print(f"🔍 DEBUG: First fill - ticker={first_fill.get('ticker')}, coid={first_fill.get('client_order_id')}, order_id={first_fill.get('order_id')}")
+
                 # Startup sync: only process recent fills (last 5 min)
                 if startup and fills:
                     from datetime import datetime, timezone
@@ -336,6 +343,7 @@ class MultiMarketMaker:
 
                 # Route fills to correct books
                 for fill in fills:
+                    print(f"🔍 DEBUG: Routing fill - ticker={fill.get('ticker')}, coid={fill.get('client_order_id')}")
                     await self._route_fill(fill)
 
             except Exception as e:
@@ -367,6 +375,15 @@ class MultiMarketMaker:
             meta = book.orders.order_registry.get(order_id)
             if meta and meta.get('strategy_id') == 'MMv2':
                 await book.process_fill(fill)
+                return
+
+        # Backward compat: if no client_order_id at all, route by ticker
+        # (for fills from orders placed before we added MMv2 tagging)
+        if not coid:
+            ticker = fill.get('ticker')
+            if ticker and ticker in self.books:
+                print(f"⚠️  Processing legacy fill (no coid) for {ticker}")
+                await self.books[ticker].process_fill(fill)
                 return
 
         # Not ours - log as foreign fill

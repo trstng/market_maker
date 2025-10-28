@@ -24,12 +24,16 @@ class KalshiAsyncClient:
         # Handle multiple newline formats (escaped, literal, etc.)
         pem_str = api_secret_pem
 
-        # Replace escaped newlines (from environment variables)
-        if '\\n' in pem_str:
+        # Replace escaped newlines (from environment variables like Railway)
+        # Check for literal backslash-n (not actual newline)
+        if '\\n' in pem_str and '\n' not in pem_str:
             pem_str = pem_str.replace('\\n', '\n')
 
-        # Ensure proper PEM format with newlines
-        if '\n' not in pem_str and '-----BEGIN' in pem_str:
+        # If already has newlines, use as-is (local .env file)
+        if '\n' in pem_str and '-----BEGIN' in pem_str and '-----END' in pem_str:
+            pem_bytes = pem_str.encode('utf-8')
+        # Ensure proper PEM format with newlines (single-line format)
+        elif '\n' not in pem_str and '-----BEGIN' in pem_str:
             # Single line PEM - add newlines
             import re
             pem_str = re.sub(r'-----BEGIN ([^-]+)-----', r'-----BEGIN \1-----\n', pem_str)
@@ -46,8 +50,10 @@ class KalshiAsyncClient:
                     # Split body into 64-char lines
                     body_lines = [body[i:i+64] for i in range(0, len(body), 64)]
                     pem_str = header + '\n'.join(body_lines) + '\n' + footer
-
-        pem_bytes = pem_str.encode('utf-8')
+            pem_bytes = pem_str.encode('utf-8')
+        else:
+            # Fallback: use as-is
+            pem_bytes = pem_str.encode('utf-8')
 
         try:
             self._priv = serialization.load_pem_private_key(
