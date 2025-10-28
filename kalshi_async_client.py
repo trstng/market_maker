@@ -130,7 +130,7 @@ class KalshiAsyncClient:
             return None
 
     async def cancel_order(self, order_id: str) -> bool:
-        """Cancel an order."""
+        """Cancel an order. Returns True if cancelled or already gone (404)."""
         try:
             sig_path = f"/trade-api/v2/portfolio/orders/{order_id}"
             req_path = f"/portfolio/orders/{order_id}"
@@ -138,10 +138,17 @@ class KalshiAsyncClient:
                 self.base_url + req_path,
                 headers=self._headers("DELETE", sig_path)
             )
+
+            # 404 is OK - order already filled/cancelled
+            if r.status_code == 404:
+                return True
+
             r.raise_for_status()
             return True
         except Exception as e:
-            print(f"❌ Order cancellation failed: {e}")
+            # Don't log 404 errors - they're expected when order is already gone
+            if "404" not in str(e):
+                print(f"❌ Order cancellation failed: {e}")
             return False
 
     async def get_order_status(self, order_id: str) -> Optional[Dict]:
