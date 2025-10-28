@@ -365,14 +365,23 @@ class MarketBook:
 
         # Validate: must belong to this strategy
         if coid and not coid.startswith('MMv2:'):
+            print(f"[{self.ticker}] ❌ Fill rejected: foreign strategy coid={coid}")
             return  # Foreign strategy fill
 
         # Validate ticker
-        if ticker != self.ticker or not oid or not fid:
+        if ticker != self.ticker:
+            print(f"[{self.ticker}] ❌ Fill rejected: wrong ticker {ticker}")
+            return
+        if not oid:
+            print(f"[{self.ticker}] ❌ Fill rejected: missing order_id")
+            return
+        if not fid:
+            print(f"[{self.ticker}] ❌ Fill rejected: missing fill_id")
             return
 
         # Check if already processed (idempotent)
         if self.orders.already_processed(oid, fid):
+            print(f"[{self.ticker}] ⏭️  Fill {fid[:8]} already processed, skipping")
             return
 
         # Extract fill details
@@ -382,10 +391,25 @@ class MarketBook:
         price_cents = fill.get('yes_price') if side == 'yes' else fill.get('no_price')
 
         if not all([side, action, count, price_cents]):
+            print(f"[{self.ticker}] ❌ Fill rejected: missing required fields side={side} action={action} count={count} price_cents={price_cents}")
             return
 
         price = price_cents / 100
-        timestamp = fill.get('created_time', int(time.time()))
+
+        # Parse timestamp (could be ISO string or Unix int)
+        ts_raw = fill.get('created_time')
+        if isinstance(ts_raw, str):
+            # ISO format: "2025-10-28T21:44:39.062000Z"
+            from datetime import datetime
+            try:
+                dt = datetime.fromisoformat(ts_raw.replace('Z', '+00:00'))
+                timestamp = int(dt.timestamp())
+            except:
+                timestamp = int(time.time())
+        elif isinstance(ts_raw, (int, float)):
+            timestamp = int(ts_raw)
+        else:
+            timestamp = int(time.time())
 
         # Process based on side and action
         if action == 'buy' and side == 'yes':
