@@ -151,7 +151,7 @@ class MultiMarketMaker:
         """Generate signed headers for WebSocket connection."""
         path = "/trade-api/ws/v2"
         ts = str(int(time.time() * 1000))
-        sig = self.api._sig(ts, "GET", path, "")
+        sig = self.api._sig(ts, "GET", path)
 
         return {
             "KALSHI-ACCESS-KEY": self.config.KALSHI_API_KEY,

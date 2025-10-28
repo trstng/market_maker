@@ -63,9 +63,12 @@ class KalshiAsyncClient:
         # Async HTTP client
         self.http = httpx.AsyncClient(timeout=timeout)
 
-    def _sig(self, ts: str, method: str, path: str, body: str = "") -> str:
-        """Generate RSA-PSS signature for request."""
-        msg = f"{ts}{method}{path}{body}".encode()
+    def _sig(self, ts: str, method: str, path: str) -> str:
+        """
+        Generate RSA-PSS signature for request.
+        Per Kalshi docs: signature = timestamp + method + path (NO BODY)
+        """
+        msg = f"{ts}{method}{path}".encode()
         sig = self._priv.sign(
             msg,
             padding.PSS(
@@ -76,12 +79,12 @@ class KalshiAsyncClient:
         )
         return base64.b64encode(sig).decode()
 
-    def _headers(self, method: str, path: str, body: str = "") -> Dict[str, str]:
+    def _headers(self, method: str, path: str) -> Dict[str, str]:
         """Generate signed headers for request."""
         ts = str(int(time.time() * 1000))
         return {
             "KALSHI-ACCESS-KEY": self.api_key,
-            "KALSHI-ACCESS-SIGNATURE": self._sig(ts, method, path, body),
+            "KALSHI-ACCESS-SIGNATURE": self._sig(ts, method, path),
             "KALSHI-ACCESS-TIMESTAMP": ts,
             "Content-Type": "application/json"
         }
@@ -114,7 +117,7 @@ class KalshiAsyncClient:
             r = await self.http.post(
                 self.base_url + path,
                 content=body,
-                headers=self._headers("POST", path, body)
+                headers=self._headers("POST", path)
             )
             r.raise_for_status()
             return r.json()
