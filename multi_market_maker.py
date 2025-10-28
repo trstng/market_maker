@@ -315,35 +315,15 @@ class MultiMarketMaker:
                 fills = result.get('fills', [])
                 cursor = result.get('cursor')
 
-                # DEBUG: Log fills API response
-                if fills:
-                    print(f"🔍 DEBUG: Received {len(fills)} fills from API")
-                    if len(fills) > 0:
-                        first_fill = fills[0]
-                        print(f"🔍 DEBUG: First fill - ticker={first_fill.get('ticker')}, coid={first_fill.get('client_order_id')}, order_id={first_fill.get('order_id')}")
 
-                # Startup sync: only process recent fills (last 5 min)
-                if startup and fills:
-                    from datetime import datetime, timezone
-                    now = time.time()
-
-                    def parse_timestamp(ts_str):
-                        """Parse ISO timestamp or Unix timestamp."""
-                        if isinstance(ts_str, (int, float)):
-                            return ts_str
-                        try:
-                            dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
-                            return dt.timestamp()
-                        except:
-                            return 0
-
-                    fills = [f for f in fills if now - parse_timestamp(f.get('created_time', 0)) < 300]
+                # Startup sync: SKIP all old fills, only process NEW ones going forward
+                if startup:
                     startup = False
-                    print(f"📥 Processing {len(fills)} recent fills from startup")
+                    print(f"📥 Startup: skipping {len(fills)} old fills, will process new fills going forward")
+                    continue  # Skip all fills on first cycle
 
                 # Route fills to correct books
                 for fill in fills:
-                    print(f"🔍 DEBUG: Routing fill - ticker={fill.get('ticker')}, coid={fill.get('client_order_id')}")
                     await self._route_fill(fill)
 
             except Exception as e:
