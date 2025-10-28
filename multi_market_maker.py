@@ -190,9 +190,16 @@ class MultiMarketMaker:
             ticker = msg.get("market_ticker")
 
             if ticker and ticker in self.books:
+                # Parse timestamp (could be int or None)
+                ts_raw = msg.get('ts')
+                if isinstance(ts_raw, (int, float)):
+                    timestamp = int(ts_raw)
+                else:
+                    timestamp = int(time.time())
+
                 # Normalize event format
                 event = {
-                    'timestamp': msg.get('ts', int(time.time())),
+                    'timestamp': timestamp,
                     'price': msg.get('price'),
                     'taker_side': msg.get('taker_side'),
                     'count': msg.get('count', 10)
