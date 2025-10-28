@@ -274,46 +274,55 @@ class MultiMarketMaker:
 
     async def fill_reconciliation_loop(self):
         """
-        Periodic fill polling and reconciliation.
-        Fetches fills portfolio-wide and routes to correct MarketBook.
+        Monitor order status for all active orders.
+        Uses order status API instead of fills API (more reliable).
         """
-        print("🔄 Fill reconciliation started")
-
-        # On startup, process recent fills (last 5 minutes)
-        startup = True
-        cursor = None
+        print("🔄 Order monitoring started")
 
         while self.running:
             try:
-                res = await self.api.get_fills(limit=200, cursor=cursor)
-                fills = res.get('fills', [])
-
-                if startup:
-                    # On first run, only process recent fills
-                    now = int(time.time())
-                    fills = [f for f in fills if now - f.get('created_time', 0) < 300]
-                    startup = False
-                    print(f"📥 Processing {len(fills)} recent fills from startup")
-
-                # Route fills to correct MarketBook
-                for fill in fills:
-                    ticker = fill.get('ticker')
-                    if ticker in self.books:
-                        await self.books[ticker].process_fill(fill)
-
-                # Update cursor for pagination
-                cursor = res.get('cursor')
-                if not cursor:
-                    cursor = None  # Reset to latest
+                # Check order status for all markets with pending orders
+                for book in self.books.values():
+                    await self._check_order_status(book)
 
             except Exception as e:
-                print(f"⚠️  Fill reconciliation error: {e}")
+                print(f"⚠️  Order monitoring error: {e}")
                 await asyncio.sleep(1.0)
 
-            # Poll every 750ms
-            await asyncio.sleep(0.75)
+            # Poll every 2 seconds
+            await asyncio.sleep(2.0)
 
-        print("🔄 Fill reconciliation stopped")
+        print("🔄 Order monitoring stopped")
+
+    async def _check_order_status(self, book):
+        """Check status of active orders for a market book."""
+        # Check bid order
+        if book.orders.active_bid:
+            status = await self.api.get_order_status(book.orders.active_bid['order_id'])
+
+            if status is None:
+                # 404 - order filled or cancelled
+                print(f"[{book.ticker}] BID order filled/cancelled")
+                book.orders.clear_active_bid()
+            elif status:
+                order = status.get('order', {})
+                if order.get('status') in ['filled', 'executed']:
+                    print(f"[{book.ticker}] BID filled: {order.get('filled_count', 0)} @ {order.get('yes_price', 0)}¢")
+                    book.orders.clear_active_bid()
+
+        # Check ask order
+        if book.orders.active_ask:
+            status = await self.api.get_order_status(book.orders.active_ask['order_id'])
+
+            if status is None:
+                # 404 - order filled or cancelled
+                print(f"[{book.ticker}] ASK order filled/cancelled")
+                book.orders.clear_active_ask()
+            elif status:
+                order = status.get('order', {})
+                if order.get('status') in ['filled', 'executed']:
+                    print(f"[{book.ticker}] ASK filled: {order.get('filled_count', 0)} @ {order.get('no_price', 0)}¢")
+                    book.orders.clear_active_ask()
 
     async def _send_discord_alert(self, message: str):
         """Send alert to Discord webhook."""

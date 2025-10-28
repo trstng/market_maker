@@ -106,6 +106,28 @@ class KalshiAsyncClient:
             print(f"❌ Order cancellation failed: {e}")
             return False
 
+    async def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """
+        Get status of a specific order.
+        Returns None if order not found (404), Dict otherwise.
+        """
+        try:
+            path = f"/portfolio/orders/{order_id}"
+            r = await self.http.get(
+                self.base_url + path,
+                headers=self._headers("GET", path)
+            )
+
+            # Handle 404 specially (order executed/removed)
+            if r.status_code == 404:
+                return None
+
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"❌ Get order status failed: {e}")
+            return None
+
     async def get_fills(self, limit: int = 200, cursor: Optional[str] = None) -> Dict:
         """
         Get portfolio fills with pagination support.
@@ -117,12 +139,16 @@ class KalshiAsyncClient:
             if cursor:
                 params["cursor"] = cursor
 
-            qp = "&".join([f"{k}={v}" for k, v in params.items()])
-            full_path = f"{path}?{qp}"
+            # Build query string
+            query = "&".join([f"{k}={v}" for k, v in params.items()])
+            full_path = f"{path}?{query}"
+
+            # Sign the FULL path (including query string)
+            headers = self._headers("GET", full_path)
 
             r = await self.http.get(
                 self.base_url + full_path,
-                headers=self._headers("GET", full_path)
+                headers=headers
             )
             r.raise_for_status()
             return r.json()
@@ -133,13 +159,18 @@ class KalshiAsyncClient:
     async def get_markets(self, params: Dict) -> Dict:
         """Get markets with filter parameters."""
         try:
-            qp = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
-            path = f"/markets?{qp}"
+            path = "/markets"
+
+            # Build query string
+            query = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
+            full_path = f"{path}?{query}"
+
+            # Sign the FULL path (including query string)
+            headers = self._headers("GET", full_path)
 
             r = await self.http.get(
-                self.base_url + "/markets",
-                params=params,
-                headers=self._headers("GET", path)
+                self.base_url + full_path,
+                headers=headers
             )
             r.raise_for_status()
             return r.json()
