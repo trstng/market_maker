@@ -24,6 +24,9 @@ class Settings:
         self.queue_share: float = float(os.getenv('QUEUE_SHARE', '0.20'))
         self.min_spread_threshold: float = float(os.getenv('MIN_SPREAD_THRESHOLD', '0.02'))
 
+        # Discord webhook for alerts
+        self.discord_webhook_url: Optional[str] = os.getenv('DISCORD_WEBHOOK_URL', None)
+
     def validate(self) -> bool:
         """Validate that required settings are present"""
         errors = []

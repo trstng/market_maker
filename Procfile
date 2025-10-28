@@ -1,1 +1,1 @@
-worker: python live_mm_bot.py
+worker: python main_async.py
