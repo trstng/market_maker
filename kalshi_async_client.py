@@ -99,7 +99,11 @@ class KalshiAsyncClient:
     ) -> Optional[Dict]:
         """Place a limit order."""
         try:
-            path = "/portfolio/orders"
+            # Signature must use FULL path from domain root
+            sig_path = "/trade-api/v2/portfolio/orders"
+            # But HTTP request uses relative path (base_url already has /trade-api/v2)
+            req_path = "/portfolio/orders"
+
             payload = {
                 "ticker": ticker,
                 "client_order_id": f"{int(time.time() * 1000)}",
@@ -115,9 +119,9 @@ class KalshiAsyncClient:
             body = json.dumps(payload, separators=(',', ':'))
 
             r = await self.http.post(
-                self.base_url + path,
+                self.base_url + req_path,
                 content=body,
-                headers=self._headers("POST", path)
+                headers=self._headers("POST", sig_path)
             )
             r.raise_for_status()
             return r.json()
@@ -128,10 +132,11 @@ class KalshiAsyncClient:
     async def cancel_order(self, order_id: str) -> bool:
         """Cancel an order."""
         try:
-            path = f"/portfolio/orders/{order_id}"
+            sig_path = f"/trade-api/v2/portfolio/orders/{order_id}"
+            req_path = f"/portfolio/orders/{order_id}"
             r = await self.http.delete(
-                self.base_url + path,
-                headers=self._headers("DELETE", path)
+                self.base_url + req_path,
+                headers=self._headers("DELETE", sig_path)
             )
             r.raise_for_status()
             return True
@@ -145,10 +150,11 @@ class KalshiAsyncClient:
         Returns None if order not found (404), Dict otherwise.
         """
         try:
-            path = f"/portfolio/orders/{order_id}"
+            sig_path = f"/trade-api/v2/portfolio/orders/{order_id}"
+            req_path = f"/portfolio/orders/{order_id}"
             r = await self.http.get(
-                self.base_url + path,
-                headers=self._headers("GET", path)
+                self.base_url + req_path,
+                headers=self._headers("GET", sig_path)
             )
 
             # Handle 404 specially (order executed/removed)
@@ -167,20 +173,21 @@ class KalshiAsyncClient:
         Returns: {fills: [...], cursor: "..."}
         """
         try:
-            path = "/portfolio/fills"
+            sig_path = "/trade-api/v2/portfolio/fills"
+            req_path = "/portfolio/fills"
             params = {"limit": limit}
             if cursor:
                 params["cursor"] = cursor
 
             # Build query string
             query = "&".join([f"{k}={v}" for k, v in params.items()])
-            full_path = f"{path}?{query}"
+            full_req_path = f"{req_path}?{query}"
 
-            # Sign the FULL path (including query string)
-            headers = self._headers("GET", full_path)
+            # Sign path WITHOUT query params (per Kalshi docs)
+            headers = self._headers("GET", sig_path)
 
             r = await self.http.get(
-                self.base_url + full_path,
+                self.base_url + full_req_path,
                 headers=headers
             )
             r.raise_for_status()
@@ -192,17 +199,18 @@ class KalshiAsyncClient:
     async def get_markets(self, params: Dict) -> Dict:
         """Get markets with filter parameters."""
         try:
-            path = "/markets"
+            sig_path = "/trade-api/v2/markets"
+            req_path = "/markets"
 
             # Build query string
             query = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
-            full_path = f"{path}?{query}"
+            full_req_path = f"{req_path}?{query}"
 
-            # Sign the FULL path (including query string)
-            headers = self._headers("GET", full_path)
+            # Sign path WITHOUT query params (per Kalshi docs)
+            headers = self._headers("GET", sig_path)
 
             r = await self.http.get(
-                self.base_url + full_path,
+                self.base_url + full_req_path,
                 headers=headers
             )
             r.raise_for_status()
