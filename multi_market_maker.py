@@ -217,6 +217,12 @@ class MultiMarketMaker:
 
         while self.running:
             try:
+                # Check heartbeat FIRST (always runs)
+                now = time.time()
+                if now - last_heartbeat >= heartbeat_interval:
+                    await self._log_heartbeat()
+                    last_heartbeat = now
+
                 # Wait for events with timeout
                 evt = await asyncio.wait_for(self.portfolio_q.get(), timeout=1.0)
 
@@ -253,11 +259,7 @@ class MultiMarketMaker:
                 await self._check_portfolio_risk()
 
             except asyncio.TimeoutError:
-                # No events, log periodic heartbeat
-                now = time.time()
-                if now - last_heartbeat >= heartbeat_interval:
-                    await self._log_heartbeat()
-                    last_heartbeat = now
+                # No events, continue to next iteration (heartbeat will trigger above)
                 continue
             except Exception as e:
                 print(f"⚠️  Portfolio loop error: {e}")
