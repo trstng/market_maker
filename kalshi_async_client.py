@@ -21,17 +21,44 @@ class KalshiAsyncClient:
         self.api_key = api_key
 
         # Load private key for signing
-        # Handle both raw PEM and escaped newlines
-        if '\\n' in api_secret_pem:
-            pem_bytes = api_secret_pem.replace('\\n', '\n').encode('utf-8')
-        else:
-            pem_bytes = api_secret_pem.encode('utf-8')
+        # Handle multiple newline formats (escaped, literal, etc.)
+        pem_str = api_secret_pem
 
-        self._priv = serialization.load_pem_private_key(
-            pem_bytes,
-            password=None,
-            backend=default_backend()
-        )
+        # Replace escaped newlines (from environment variables)
+        if '\\n' in pem_str:
+            pem_str = pem_str.replace('\\n', '\n')
+
+        # Ensure proper PEM format with newlines
+        if '\n' not in pem_str and '-----BEGIN' in pem_str:
+            # Single line PEM - add newlines
+            import re
+            pem_str = re.sub(r'-----BEGIN ([^-]+)-----', r'-----BEGIN \1-----\n', pem_str)
+            pem_str = re.sub(r'-----END ([^-]+)-----', r'\n-----END \1-----', pem_str)
+            # Split the middle part into 64-char lines
+            parts = pem_str.split('\n')
+            if len(parts) == 2:  # Just header and footer
+                header = parts[0] + '\n'
+                body_and_footer = parts[1]
+                footer_match = re.search(r'(-----END [^-]+-----)', body_and_footer)
+                if footer_match:
+                    body = body_and_footer[:footer_match.start()]
+                    footer = footer_match.group(1)
+                    # Split body into 64-char lines
+                    body_lines = [body[i:i+64] for i in range(0, len(body), 64)]
+                    pem_str = header + '\n'.join(body_lines) + '\n' + footer
+
+        pem_bytes = pem_str.encode('utf-8')
+
+        try:
+            self._priv = serialization.load_pem_private_key(
+                pem_bytes,
+                password=None,
+                backend=default_backend()
+            )
+        except Exception as e:
+            print(f"❌ Failed to load private key: {e}")
+            print(f"Key starts with: {pem_str[:50]}...")
+            raise
 
         # Async HTTP client
         self.http = httpx.AsyncClient(timeout=timeout)
