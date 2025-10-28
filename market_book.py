@@ -62,8 +62,14 @@ class MarketBook:
         self.mid_ema: Optional[float] = None
 
         # Control flags
-        self.quoting_enabled = True
+        # Check environment variable for live trading toggle
+        import os
+        live_trading = os.getenv('LIVE_TRADING_ENABLED', 'true').lower() == 'true'
+        self.quoting_enabled = live_trading
         self.running = True
+
+        if not live_trading:
+            print(f"[{self.ticker}] 📄 PAPER MODE - No real orders will be placed")
 
         # Quote cooldown tracking (per side)
         self._last_quote_ts = {'bid': 0.0, 'ask': 0.0}
@@ -263,7 +269,8 @@ class MarketBook:
                 self.orders.active_bid = {
                     'order_id': od['order']['order_id'],
                     'price': price,
-                    'qty': qty
+                    'qty': qty,
+                    'filled_count': 0
                 }
                 print(f"[{self.ticker}] BID placed: {qty} @ ${price:.4f} ({cents}¢)")
         else:  # ask
@@ -278,7 +285,8 @@ class MarketBook:
                 self.orders.active_ask = {
                     'order_id': od['order']['order_id'],
                     'price': price,
-                    'qty': qty
+                    'qty': qty,
+                    'filled_count': 0
                 }
                 print(f"[{self.ticker}] ASK placed: {qty} @ ${price:.4f} ({cents}¢)")
 

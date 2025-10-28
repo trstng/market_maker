@@ -212,6 +212,9 @@ class MultiMarketMaker:
         """
         print("👁️  Portfolio monitor started")
 
+        last_heartbeat = time.time()
+        heartbeat_interval = 60  # Log status every 60 seconds
+
         while self.running:
             try:
                 # Wait for events with timeout
@@ -250,13 +253,43 @@ class MultiMarketMaker:
                 await self._check_portfolio_risk()
 
             except asyncio.TimeoutError:
-                # No events, continue
+                # No events, log periodic heartbeat
+                now = time.time()
+                if now - last_heartbeat >= heartbeat_interval:
+                    await self._log_heartbeat()
+                    last_heartbeat = now
                 continue
             except Exception as e:
                 print(f"⚠️  Portfolio loop error: {e}")
                 await asyncio.sleep(0.1)
 
         print("👁️  Portfolio monitor stopped")
+
+    async def _log_heartbeat(self):
+        """Log periodic status update showing bot is alive and monitoring."""
+        print("=" * 60)
+        print("💓 HEARTBEAT - Bot Status")
+        print("=" * 60)
+
+        for ticker, book in self.books.items():
+            # Get current state
+            net = book.inventory.net_contracts
+            vwap = book.inventory.vwap_entry if net != 0 else None
+            mid = book.mid_ema
+            realized_pnl = book.inventory.realized_pnl
+
+            # Order status
+            bid_status = f"{book.orders.active_bid['qty']}@{book.orders.active_bid['price']:.4f}" if book.orders.active_bid else "None"
+            ask_status = f"{book.orders.active_ask['qty']}@{book.orders.active_ask['price']:.4f}" if book.orders.active_ask else "None"
+
+            print(f"\n[{ticker}]")
+            print(f"  Mid: ${mid:.4f}" if mid else "  Mid: N/A")
+            print(f"  Position: {net:+d} contracts" + (f" (VWAP: ${vwap:.4f})" if vwap else ""))
+            print(f"  Realized P&L: ${realized_pnl:+.2f}")
+            print(f"  Active Orders: BID={bid_status} | ASK={ask_status}")
+            print(f"  Quoting: {'✅ Active' if book.quoting_enabled else '⏸️  Paused'}")
+
+        print("=" * 60)
 
     async def _check_portfolio_risk(self):
         """Check for portfolio-level risk conditions."""
@@ -295,19 +328,53 @@ class MultiMarketMaker:
         print("🔄 Order monitoring stopped")
 
     async def _check_order_status(self, book):
-        """Check status of active orders for a market book."""
+        """Check status of active orders for a market book and process fills."""
         # Check bid order
         if book.orders.active_bid:
             status = await self.api.get_order_status(book.orders.active_bid['order_id'])
 
             if status is None:
                 # 404 - order filled or cancelled
-                print(f"[{book.ticker}] BID order filled/cancelled")
+                print(f"[{book.ticker}] BID order filled/cancelled (404)")
                 book.orders.clear_active_bid()
             elif status:
                 order = status.get('order', {})
-                if order.get('status') in ['filled', 'executed']:
-                    print(f"[{book.ticker}] BID filled: {order.get('filled_count', 0)} @ {order.get('yes_price', 0)}¢")
+                order_id = order.get('order_id')
+                filled_count = order.get('filled_count', 0)
+                total_count = order.get('count', 0)
+                price = order.get('yes_price')
+                order_status = order.get('status', '')
+
+                # Detect NEW fills (partial or full)
+                prev_filled = book.orders.active_bid.get('filled_count', 0)
+                new_fills = filled_count - prev_filled
+
+                if new_fills > 0:
+                    # New fill detected! Create fill object and process it
+                    print(f"[{book.ticker}] 🟢 BID FILL: {new_fills} contracts @ {price}¢ (total: {filled_count}/{total_count})")
+
+                    fill = {
+                        'order_id': order_id,
+                        'fill_id': f"{order_id}_{filled_count}",  # Synthetic fill_id
+                        'ticker': book.ticker,
+                        'side': 'yes',
+                        'action': 'buy',
+                        'count': new_fills,
+                        'yes_price': price,
+                        'no_price': None,
+                        'created_time': int(time.time())
+                    }
+
+                    # Process the fill (creates position, places exit order)
+                    await book.process_fill(fill)
+
+                    # Update tracked filled_count
+                    book.orders.active_bid['filled_count'] = filled_count
+
+                # Clear order if fully filled or cancelled
+                if order_status in ['filled', 'executed', 'cancelled'] or filled_count == total_count:
+                    if filled_count == total_count:
+                        print(f"[{book.ticker}] BID order fully filled ({filled_count}/{total_count})")
                     book.orders.clear_active_bid()
 
         # Check ask order
@@ -316,12 +383,46 @@ class MultiMarketMaker:
 
             if status is None:
                 # 404 - order filled or cancelled
-                print(f"[{book.ticker}] ASK order filled/cancelled")
+                print(f"[{book.ticker}] ASK order filled/cancelled (404)")
                 book.orders.clear_active_ask()
             elif status:
                 order = status.get('order', {})
-                if order.get('status') in ['filled', 'executed']:
-                    print(f"[{book.ticker}] ASK filled: {order.get('filled_count', 0)} @ {order.get('no_price', 0)}¢")
+                order_id = order.get('order_id')
+                filled_count = order.get('filled_count', 0)
+                total_count = order.get('count', 0)
+                price = order.get('yes_price')
+                order_status = order.get('status', '')
+
+                # Detect NEW fills (partial or full)
+                prev_filled = book.orders.active_ask.get('filled_count', 0)
+                new_fills = filled_count - prev_filled
+
+                if new_fills > 0:
+                    # New fill detected! Create fill object and process it
+                    print(f"[{book.ticker}] 🔴 ASK FILL: {new_fills} contracts @ {price}¢ (total: {filled_count}/{total_count})")
+
+                    fill = {
+                        'order_id': order_id,
+                        'fill_id': f"{order_id}_{filled_count}",  # Synthetic fill_id
+                        'ticker': book.ticker,
+                        'side': 'yes',
+                        'action': 'sell',
+                        'count': new_fills,
+                        'yes_price': price,
+                        'no_price': None,
+                        'created_time': int(time.time())
+                    }
+
+                    # Process the fill (creates position, places exit order)
+                    await book.process_fill(fill)
+
+                    # Update tracked filled_count
+                    book.orders.active_ask['filled_count'] = filled_count
+
+                # Clear order if fully filled or cancelled
+                if order_status in ['filled', 'executed', 'cancelled'] or filled_count == total_count:
+                    if filled_count == total_count:
+                        print(f"[{book.ticker}] ASK order fully filled ({filled_count}/{total_count})")
                     book.orders.clear_active_ask()
 
     async def _send_discord_alert(self, message: str):

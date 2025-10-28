@@ -21,8 +21,8 @@ class OrderState:
         self.client_map: Dict[str, Dict] = {}
 
         # Active orders on each side
-        self.active_bid: Optional[Dict] = None  # {'order_id', 'price', 'qty'}
-        self.active_ask: Optional[Dict] = None
+        self.active_bid: Optional[Dict] = None  # {'order_id', 'price', 'qty', 'filled_count'}
+        self.active_ask: Optional[Dict] = None  # {'order_id', 'price', 'qty', 'filled_count'}
 
         # Processed fills: (order_id, fill_id) pairs
         self.processed_fills: Set[Tuple[str, str]] = set()
