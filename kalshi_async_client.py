@@ -102,11 +102,14 @@ class KalshiAsyncClient:
                 "client_order_id": f"{int(time.time() * 1000)}",
                 "side": side,
                 "action": action,
+                "count": count,
                 "type": "limit",
                 "yes_price": price_cents if side == "yes" else None,
                 "no_price": price_cents if side == "no" else None
             }
-            body = json.dumps(payload)
+
+            # Serialize with sorted keys for consistent signature (no spaces)
+            body = json.dumps(payload, separators=(',', ':'))
 
             r = await self.http.post(
                 self.base_url + path,
