@@ -308,24 +308,18 @@ class MultiMarketMaker:
     async def fill_reconciliation_loop(self):
         """
         Portfolio-wide fills monitoring using /portfolio/fills endpoint.
-        Push-based approach with cursor pagination.
+        Always queries latest fills (cursor=None) and uses seen_fill_ids for deduplication.
         """
         print("🔄 Fills monitoring started")
 
-        cursor = None
         startup = True
         seen_fill_ids = set()  # Track processed fills to avoid reprocessing
 
         while self.running:
             try:
-                # Fetch fills from portfolio endpoint
-                result = await self.api.get_fills(limit=200, cursor=cursor)
+                # ALWAYS fetch latest fills (cursor=None) to catch new fills
+                result = await self.api.get_fills(limit=200, cursor=None)
                 fills = result.get('fills', [])
-                new_cursor = result.get('cursor')
-
-                # Update cursor only if it changed
-                if new_cursor and new_cursor != cursor:
-                    cursor = new_cursor
 
                 # Startup sync: SKIP all old fills, only process NEW ones going forward
                 if startup:
