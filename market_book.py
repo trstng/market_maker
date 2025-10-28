@@ -5,8 +5,16 @@ Async task that manages one market's state, quotes, and fills
 import time
 import asyncio
 import math
+import random
 from typing import Optional, Dict, Tuple
 from order_state import OrderState
+
+
+def make_coid(strategy_id: str, ticker: str) -> str:
+    """Generate strategy-scoped client_order_id for routing."""
+    ts = int(time.time() * 1000)
+    nonce = random.randint(0, 9999)
+    return f"{strategy_id}:{ticker}:{ts}:{nonce:04d}"
 
 
 # Import fee utilities from existing code
@@ -254,8 +262,9 @@ class MarketBook:
         if active:
             await self.api.cancel_order(active['order_id'])
 
-        # Place new order
+        # Place new order with strategy-tagged client_order_id
         cents = int(round(price * 100))
+        coid = make_coid("MMv2", self.ticker)
 
         if side == 'bid':
             od = await self.api.place_order(
@@ -263,15 +272,25 @@ class MarketBook:
                 side="yes",
                 action="buy",
                 count=qty,
-                price_cents=cents
+                price_cents=cents,
+                client_order_id=coid
             )
             if od and 'order' in od:
+                order_id = od['order']['order_id']
                 self.orders.active_bid = {
-                    'order_id': od['order']['order_id'],
+                    'order_id': order_id,
+                    'client_order_id': coid,
                     'price': price,
                     'qty': qty,
                     'filled_count': 0
                 }
+                # Register for routing
+                self.orders.register_order(coid, {
+                    "order_id": order_id,
+                    "strategy_id": "MMv2",
+                    "ticker": self.ticker,
+                    "side": "bid"
+                })
                 print(f"[{self.ticker}] BID placed: {qty} @ ${price:.4f} ({cents}¢)")
         else:  # ask
             od = await self.api.place_order(
@@ -279,15 +298,25 @@ class MarketBook:
                 side="yes",
                 action="sell",
                 count=qty,
-                price_cents=cents
+                price_cents=cents,
+                client_order_id=coid
             )
             if od and 'order' in od:
+                order_id = od['order']['order_id']
                 self.orders.active_ask = {
-                    'order_id': od['order']['order_id'],
+                    'order_id': order_id,
+                    'client_order_id': coid,
                     'price': price,
                     'qty': qty,
                     'filled_count': 0
                 }
+                # Register for routing
+                self.orders.register_order(coid, {
+                    "order_id": order_id,
+                    "strategy_id": "MMv2",
+                    "ticker": self.ticker,
+                    "side": "ask"
+                })
                 print(f"[{self.ticker}] ASK placed: {qty} @ ${price:.4f} ({cents}¢)")
 
     async def _flatten(self, exit_px: float, ts: int, reason: str):
@@ -332,8 +361,13 @@ class MarketBook:
         oid = fill.get('order_id')
         fid = fill.get('fill_id')
         ticker = fill.get('ticker')
+        coid = fill.get('client_order_id', '')
 
-        # Validate fill
+        # Validate: must belong to this strategy
+        if coid and not coid.startswith('MMv2:'):
+            return  # Foreign strategy fill
+
+        # Validate ticker
         if ticker != self.ticker or not oid or not fid:
             return
 

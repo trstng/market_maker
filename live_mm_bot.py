@@ -71,6 +71,9 @@ class BotConfig:
     TRADES_TABLE = 'trades'
     MARKET_METADATA_TABLE = 'market_metadata'
 
+    # Discord webhook for alerts
+    DISCORD_WEBHOOK_URL = settings.discord_webhook_url
+
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -457,6 +460,33 @@ class KalshiAPIClient:
             print(f"❌ Failed to cancel order: {e}")
             return False
 
+    def get_fills(self, ticker: Optional[str] = None, limit: int = 100) -> List[Dict]:
+        """Get recent fills from portfolio."""
+        try:
+            path = "/portfolio/fills"
+            params = {"limit": limit}
+            if ticker:
+                params["ticker"] = ticker
+
+            # Build query string
+            query = "&".join([f"{k}={v}" for k, v in params.items()])
+            full_path = f"{path}?{query}"
+
+            headers = self._get_signed_headers("GET", full_path)
+
+            response = self.session.get(
+                f"{self.base_url}{full_path}",
+                headers=headers
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            return data.get("fills", [])
+
+        except Exception as e:
+            print(f"❌ Failed to get fills: {e}")
+            return []
+
     def get_positions(self) -> List[Dict]:
         """Get current positions."""
         try:
@@ -680,6 +710,12 @@ class LiveMarketMaker:
         self.fills_executed = 0
         self.policy_triggers = 0
 
+        # Live trading state
+        self.active_bid_order: Optional[Dict] = None  # {'order_id': str, 'price': float, 'qty': int}
+        self.active_ask_order: Optional[Dict] = None
+        self.last_fill_check_time = 0
+        self.live_trading_enabled = True  # Set to False to disable live orders
+
         # Connect to WebSocket for real-time data
         self.kalshi_client.connect_websocket(market_ticker, self.on_trade)
 
@@ -692,10 +728,8 @@ class LiveMarketMaker:
         """
         timestamp = trade.get('timestamp', int(time.time()))
         price = trade.get('price')
-        taker_side = trade.get('taker_side')
-        trade_size = trade.get('count', 10)
 
-        if not price or not taker_side:
+        if not price:
             return
 
         price_dollars = price / 100
@@ -716,7 +750,17 @@ class LiveMarketMaker:
 
         if should_flatten:
             self._flatten_inventory(self.mid_ema, timestamp, reason)
+            # Cancel all orders when flattening
+            if self.active_bid_order:
+                self.kalshi_client.cancel_order(self.active_bid_order['order_id'])
+                self.active_bid_order = None
+            if self.active_ask_order:
+                self.kalshi_client.cancel_order(self.active_ask_order['order_id'])
+                self.active_ask_order = None
             return
+
+        # Check for fills from the exchange periodically
+        self._check_and_reconcile_fills()
 
         # Calculate inventory skew
         skew = self.policy.get_inventory_skew(
@@ -724,52 +768,29 @@ class LiveMarketMaker:
             size_cap=100
         )
 
-        # Determine if we quote and get filled
+        # Determine quotes based on inventory
         base_spread = self.config.BASE_SPREAD
-        my_queue_share = self.config.QUEUE_SHARE
+        quote_size = self.config.SIZE_PER_FILL
+
+        # Calculate quote prices based on inventory state
+        quote_bid = None
+        quote_ask = None
 
         # If neutral inventory (|net| < 20), quote both sides
         if abs(self.inventory.net_contracts) < 20:
             quote_bid = self.mid_ema - base_spread
             quote_ask = self.mid_ema + base_spread
 
-            # Seller ("no" taker) hits our bid if trade_price <= bid
-            if taker_side == 'no' and price_dollars <= quote_bid:
-                # We provide bid liquidity (buy at our bid)
-                filled_qty = min(self.config.SIZE_PER_FILL, int(my_queue_share * trade_size))
-                if filled_qty > 0:
-                    self._execute_fill(filled_qty, quote_bid, timestamp, 'long')
-
-            # Buyer ("yes" taker) lifts our ask if trade_price >= ask
-            elif taker_side == 'yes' and price_dollars >= quote_ask:
-                # We provide ask liquidity (sell at our ask)
-                filled_qty = min(self.config.SIZE_PER_FILL, int(my_queue_share * trade_size))
-                if filled_qty > 0:
-                    self._execute_fill(filled_qty, quote_ask, timestamp, 'short')
-
         # If long inventory (net > 20), prefer to sell
         elif self.inventory.net_contracts > 20:
             quote_ask = self.mid_ema + base_spread * (1 + abs(skew))
-
-            # Buyer hits our ask if trade_price >= ask
-            if taker_side == 'yes' and price_dollars >= quote_ask:
-                filled_qty = min(self.config.SIZE_PER_FILL, int(my_queue_share * trade_size))
-                if filled_qty > 0:
-                    # Close position
-                    roundtrip_fees = fees_roundtrip(filled_qty, self.inventory.vwap_entry, quote_ask)
-                    self._realize_position(filled_qty, quote_ask, timestamp, roundtrip_fees, 'normal_exit')
 
         # If short inventory (net < -20), prefer to buy
         elif self.inventory.net_contracts < -20:
             quote_bid = self.mid_ema - base_spread * (1 + abs(skew))
 
-            # Seller hits our bid if trade_price <= bid
-            if taker_side == 'no' and price_dollars <= quote_bid:
-                filled_qty = min(self.config.SIZE_PER_FILL, int(my_queue_share * trade_size))
-                if filled_qty > 0:
-                    # Close position
-                    roundtrip_fees = fees_roundtrip(filled_qty, abs(self.inventory.vwap_entry), quote_bid)
-                    self._realize_position(filled_qty, quote_bid, timestamp, roundtrip_fees, 'normal_exit')
+        # Update orders on exchange
+        self._update_quotes(quote_bid, quote_ask, quote_size)
 
         self.trades_processed += 1
 
@@ -829,6 +850,163 @@ class LiveMarketMaker:
         self.policy_triggers += 1
 
         print(f"[TRIGGER] {reason} | Flattened {net_before:+d} contracts @ ${exit_price:.4f} | P&L: ${pnl_from_flatten:+.2f}")
+
+    def _send_discord_alert(self, message: str, embed: Optional[Dict] = None):
+        """Send alert to Discord webhook."""
+        webhook_url = self.config.DISCORD_WEBHOOK_URL
+        if not webhook_url:
+            return
+
+        try:
+            payload = {"content": message}
+            if embed:
+                payload["embeds"] = [embed]
+
+            response = self.kalshi_client.session.post(webhook_url, json=payload)
+            response.raise_for_status()
+        except Exception as e:
+            print(f"⚠️  Failed to send Discord alert: {e}")
+
+    def _update_quotes(self, bid_price: Optional[float], ask_price: Optional[float], qty: int):
+        """
+        Update active quotes on the exchange.
+        Cancels old orders and places new ones if prices changed.
+        """
+        if not self.live_trading_enabled:
+            return
+
+        # Handle bid side
+        if bid_price is not None:
+            bid_cents = int(bid_price * 100)
+
+            # Cancel old bid if price changed or doesn't exist
+            if self.active_bid_order:
+                old_price_cents = int(self.active_bid_order['price'] * 100)
+                if old_price_cents != bid_cents:
+                    self.kalshi_client.cancel_order(self.active_bid_order['order_id'])
+                    self.active_bid_order = None
+
+            # Place new bid if needed
+            if not self.active_bid_order:
+                order = self.kalshi_client.place_order(
+                    market_ticker=self.market_ticker,
+                    side="yes",
+                    action="buy",
+                    count=qty,
+                    price_cents=bid_cents
+                )
+                if order:
+                    self.active_bid_order = {
+                        'order_id': order.get('order', {}).get('order_id'),
+                        'price': bid_price,
+                        'qty': qty
+                    }
+                    self._send_discord_alert(f"📊 **Order Placed**\nBID: {qty} @ ${bid_price:.4f} ({bid_cents}¢)")
+        else:
+            # Cancel bid if no longer needed
+            if self.active_bid_order:
+                self.kalshi_client.cancel_order(self.active_bid_order['order_id'])
+                self.active_bid_order = None
+
+        # Handle ask side
+        if ask_price is not None:
+            ask_cents = int(ask_price * 100)
+
+            # Cancel old ask if price changed or doesn't exist
+            if self.active_ask_order:
+                old_price_cents = int(self.active_ask_order['price'] * 100)
+                if old_price_cents != ask_cents:
+                    self.kalshi_client.cancel_order(self.active_ask_order['order_id'])
+                    self.active_ask_order = None
+
+            # Place new ask if needed
+            if not self.active_ask_order:
+                order = self.kalshi_client.place_order(
+                    market_ticker=self.market_ticker,
+                    side="yes",
+                    action="sell",
+                    count=qty,
+                    price_cents=ask_cents
+                )
+                if order:
+                    self.active_ask_order = {
+                        'order_id': order.get('order', {}).get('order_id'),
+                        'price': ask_price,
+                        'qty': qty
+                    }
+                    self._send_discord_alert(f"📊 **Order Placed**\nASK: {qty} @ ${ask_price:.4f} ({ask_cents}¢)")
+        else:
+            # Cancel ask if no longer needed
+            if self.active_ask_order:
+                self.kalshi_client.cancel_order(self.active_ask_order['order_id'])
+                self.active_ask_order = None
+
+    def _check_and_reconcile_fills(self):
+        """
+        Check for actual fills from the exchange and reconcile with local state.
+        Should be called periodically (every few seconds).
+        """
+        current_time = int(time.time())
+
+        # Only check every 3 seconds
+        if current_time - self.last_fill_check_time < 3:
+            return
+
+        self.last_fill_check_time = current_time
+
+        # Fetch recent fills for this market
+        fills = self.kalshi_client.get_fills(ticker=self.market_ticker, limit=50)
+
+        for fill in fills:
+            fill_time = fill.get('created_time')
+            # Only process recent fills (within last 10 seconds)
+            # This prevents reprocessing old fills on startup
+            if fill_time and current_time - fill_time <= 10:
+                self._process_exchange_fill(fill)
+
+    def _process_exchange_fill(self, fill: Dict):
+        """Process a fill received from the exchange API."""
+        try:
+            # Extract fill details
+            side = fill.get('side')  # 'yes' or 'no'
+            action = fill.get('action')  # 'buy' or 'sell'
+            count = fill.get('count', 0)
+            price_cents = fill.get('yes_price') if side == 'yes' else fill.get('no_price')
+
+            if not all([side, action, count, price_cents]):
+                return
+
+            price = price_cents / 100
+            timestamp = fill.get('created_time', int(time.time()))
+
+            # Determine if this is opening or closing a position
+            # Buy yes = long, Sell yes = close long
+            # Buy no = short, Sell no = close short
+            if action == 'buy' and side == 'yes':
+                # Opening long position
+                self._execute_fill(count, price, timestamp, 'long')
+            elif action == 'sell' and side == 'yes':
+                # Closing long position
+                fees = fees_roundtrip(count, self.inventory.vwap_entry, price)
+                self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
+            elif action == 'buy' and side == 'no':
+                # Opening short position
+                self._execute_fill(count, price, timestamp, 'short')
+            elif action == 'sell' and side == 'no':
+                # Closing short position
+                fees = fees_roundtrip(count, abs(self.inventory.vwap_entry), price)
+                self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
+
+            # Send Discord alert for fill
+            emoji = "🟢" if action == "buy" else "🔴"
+            self._send_discord_alert(
+                f"{emoji} **FILL RECEIVED**\n"
+                f"{action.upper()} {side.upper()} {count} @ ${price:.4f}\n"
+                f"Net Position: {self.inventory.net_contracts:+d}"
+            )
+
+        except Exception as e:
+            print(f"⚠️  Error processing exchange fill: {e}")
 
     def get_status(self) -> Dict:
         """Get current bot status."""

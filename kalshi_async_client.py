@@ -95,18 +95,23 @@ class KalshiAsyncClient:
         side: str,
         action: str,
         count: int,
-        price_cents: int
+        price_cents: int,
+        client_order_id: Optional[str] = None
     ) -> Optional[Dict]:
-        """Place a limit order."""
+        """Place a limit order with optional client_order_id."""
         try:
             # Signature must use FULL path from domain root
             sig_path = "/trade-api/v2/portfolio/orders"
             # But HTTP request uses relative path (base_url already has /trade-api/v2)
             req_path = "/portfolio/orders"
 
+            # Use provided client_order_id or generate timestamp-based one
+            if not client_order_id:
+                client_order_id = f"{int(time.time() * 1000)}"
+
             payload = {
                 "ticker": ticker,
-                "client_order_id": f"{int(time.time() * 1000)}",
+                "client_order_id": client_order_id,
                 "side": side,
                 "action": action,
                 "count": count,
@@ -154,7 +159,10 @@ class KalshiAsyncClient:
     async def get_order_status(self, order_id: str) -> Optional[Dict]:
         """
         Get status of a specific order.
-        Returns None if order not found (404), Dict otherwise.
+        Returns:
+            None if order not found (404)
+            {} (empty dict) if rate limited (429) or other error
+            Dict with order data if successful
         """
         try:
             sig_path = f"/trade-api/v2/portfolio/orders/{order_id}"
@@ -164,6 +172,10 @@ class KalshiAsyncClient:
                 headers=self._headers("GET", sig_path)
             )
 
+            # Handle 429 rate limit - return empty dict (don't process as fill)
+            if r.status_code == 429:
+                return {}
+
             # Handle 404 specially (order executed/removed)
             if r.status_code == 404:
                 return None
@@ -171,8 +183,11 @@ class KalshiAsyncClient:
             r.raise_for_status()
             return r.json()
         except Exception as e:
+            # Check if it's a rate limit error
+            if "429" in str(e):
+                return {}
             print(f"❌ Get order status failed: {e}")
-            return None
+            return {}
 
     async def get_fills(self, limit: int = 200, cursor: Optional[str] = None) -> Dict:
         """

@@ -298,175 +298,66 @@ class MultiMarketMaker:
 
     async def fill_reconciliation_loop(self):
         """
-        Monitor order status for all active orders.
-        Uses order status API instead of fills API (more reliable).
+        Portfolio-wide fills monitoring using /portfolio/fills endpoint.
+        Push-based approach with cursor pagination.
         """
-        print("🔄 Order monitoring started")
+        print("🔄 Fills monitoring started")
+
+        cursor = None
+        startup = True
 
         while self.running:
             try:
-                # Check order status for all markets with pending orders
-                for book in self.books.values():
-                    await self._check_order_status(book)
+                # Fetch fills from portfolio endpoint
+                result = await self.api.get_fills(limit=200, cursor=cursor)
+                fills = result.get('fills', [])
+                cursor = result.get('cursor')
+
+                # Startup sync: only process recent fills (last 5 min)
+                if startup and fills:
+                    now = int(time.time())
+                    fills = [f for f in fills if now - int(f.get('created_time', 0)) < 300]
+                    startup = False
+                    print(f"📥 Processing {len(fills)} recent fills from startup")
+
+                # Route fills to correct books
+                for fill in fills:
+                    await self._route_fill(fill)
 
             except Exception as e:
-                print(f"⚠️  Order monitoring error: {e}")
+                print(f"⚠️  Fills monitoring error: {e}")
                 await asyncio.sleep(1.0)
 
-            # Poll every 2 seconds
+            # Poll every 2 seconds (single portfolio-wide call)
             await asyncio.sleep(2.0)
 
-        print("🔄 Order monitoring stopped")
+        print("🔄 Fills monitoring stopped")
 
-    async def _check_order_status(self, book):
-        """Check status of active orders for a market book and process fills."""
-        # Check bid order
-        if book.orders.active_bid:
-            status = await self.api.get_order_status(book.orders.active_bid['order_id'])
+    async def _route_fill(self, fill: Dict):
+        """
+        Route fill to correct market book based on client_order_id or order_id.
+        Only processes fills belonging to MMv2 strategy.
+        """
+        # Check client_order_id first (primary routing)
+        coid = fill.get('client_order_id', '')
+        if coid and coid.startswith('MMv2:'):
+            # Extract ticker from client_order_id
+            ticker = fill.get('ticker')
+            if ticker and ticker in self.books:
+                await self.books[ticker].process_fill(fill)
+                return
 
-            if status is None:
-                # 404 - order filled or cancelled
-                # Assume full fill and process it
-                order_id = book.orders.active_bid['order_id']
-                qty = book.orders.active_bid['qty']
-                price = book.orders.active_bid['price']
-                prev_filled = book.orders.active_bid.get('filled_count', 0)
-                remaining_qty = qty - prev_filled
+        # Fallback: check order_registry
+        order_id = fill.get('order_id')
+        for book in self.books.values():
+            meta = book.orders.order_registry.get(order_id)
+            if meta and meta.get('strategy_id') == 'MMv2':
+                await book.process_fill(fill)
+                return
 
-                if remaining_qty > 0:
-                    # Process the remaining fill
-                    print(f"[{book.ticker}] 🟢 BID FILL: {remaining_qty} contracts @ {int(price*100)}¢ (404 - fully filled)")
-
-                    fill = {
-                        'order_id': order_id,
-                        'fill_id': f"{order_id}_404",
-                        'ticker': book.ticker,
-                        'side': 'yes',
-                        'action': 'buy',
-                        'count': remaining_qty,
-                        'yes_price': int(price * 100),
-                        'no_price': None,
-                        'created_time': int(time.time())
-                    }
-
-                    await book.process_fill(fill)
-                else:
-                    print(f"[{book.ticker}] BID order removed (404) - already fully processed")
-
-                book.orders.clear_active_bid()
-            elif status:
-                order = status.get('order', {})
-                order_id = order.get('order_id')
-                filled_count = order.get('filled_count', 0)
-                total_count = order.get('count', 0)
-                price = order.get('yes_price')
-                order_status = order.get('status', '')
-
-                # Detect NEW fills (partial or full)
-                prev_filled = book.orders.active_bid.get('filled_count', 0)
-                new_fills = filled_count - prev_filled
-
-                if new_fills > 0 and filled_count > 0:  # Must have actual fills
-                    # New fill detected! Create fill object and process it
-                    print(f"[{book.ticker}] 🟢 BID FILL: {new_fills} contracts @ {price}¢ (total: {filled_count}/{total_count})")
-
-                    fill = {
-                        'order_id': order_id,
-                        'fill_id': f"{order_id}_{filled_count}",  # Synthetic fill_id
-                        'ticker': book.ticker,
-                        'side': 'yes',
-                        'action': 'buy',
-                        'count': new_fills,
-                        'yes_price': price,
-                        'no_price': None,
-                        'created_time': int(time.time())
-                    }
-
-                    # Process the fill (creates position, places exit order)
-                    await book.process_fill(fill)
-
-                    # Update tracked filled_count
-                    book.orders.active_bid['filled_count'] = filled_count
-
-                # ONLY clear if status explicitly says filled/cancelled AND we have valid data
-                if order_status in ['filled', 'executed', 'cancelled']:
-                    if filled_count > 0:
-                        print(f"[{book.ticker}] BID order fully filled ({filled_count}/{total_count})")
-                    book.orders.clear_active_bid()
-
-        # Check ask order
-        if book.orders.active_ask:
-            status = await self.api.get_order_status(book.orders.active_ask['order_id'])
-
-            if status is None:
-                # 404 - order filled or cancelled
-                # Assume full fill and process it
-                order_id = book.orders.active_ask['order_id']
-                qty = book.orders.active_ask['qty']
-                price = book.orders.active_ask['price']
-                prev_filled = book.orders.active_ask.get('filled_count', 0)
-                remaining_qty = qty - prev_filled
-
-                if remaining_qty > 0:
-                    # Process the remaining fill
-                    print(f"[{book.ticker}] 🔴 ASK FILL: {remaining_qty} contracts @ {int(price*100)}¢ (404 - fully filled)")
-
-                    fill = {
-                        'order_id': order_id,
-                        'fill_id': f"{order_id}_404",
-                        'ticker': book.ticker,
-                        'side': 'yes',
-                        'action': 'sell',
-                        'count': remaining_qty,
-                        'yes_price': int(price * 100),
-                        'no_price': None,
-                        'created_time': int(time.time())
-                    }
-
-                    await book.process_fill(fill)
-                else:
-                    print(f"[{book.ticker}] ASK order removed (404) - already fully processed")
-
-                book.orders.clear_active_ask()
-            elif status:
-                order = status.get('order', {})
-                order_id = order.get('order_id')
-                filled_count = order.get('filled_count', 0)
-                total_count = order.get('count', 0)
-                price = order.get('yes_price')
-                order_status = order.get('status', '')
-
-                # Detect NEW fills (partial or full)
-                prev_filled = book.orders.active_ask.get('filled_count', 0)
-                new_fills = filled_count - prev_filled
-
-                if new_fills > 0 and filled_count > 0:  # Must have actual fills
-                    # New fill detected! Create fill object and process it
-                    print(f"[{book.ticker}] 🔴 ASK FILL: {new_fills} contracts @ {price}¢ (total: {filled_count}/{total_count})")
-
-                    fill = {
-                        'order_id': order_id,
-                        'fill_id': f"{order_id}_{filled_count}",  # Synthetic fill_id
-                        'ticker': book.ticker,
-                        'side': 'yes',
-                        'action': 'sell',
-                        'count': new_fills,
-                        'yes_price': price,
-                        'no_price': None,
-                        'created_time': int(time.time())
-                    }
-
-                    # Process the fill (creates position, places exit order)
-                    await book.process_fill(fill)
-
-                    # Update tracked filled_count
-                    book.orders.active_ask['filled_count'] = filled_count
-
-                # ONLY clear if status explicitly says filled/cancelled AND we have valid data
-                if order_status in ['filled', 'executed', 'cancelled']:
-                    if filled_count > 0:
-                        print(f"[{book.ticker}] ASK order fully filled ({filled_count}/{total_count})")
-                    book.orders.clear_active_ask()
+        # Not ours - log as foreign fill
+        if order_id or coid:
+            pass  # Silently ignore foreign fills
 
     async def _send_discord_alert(self, message: str):
         """Send alert to Discord webhook."""
