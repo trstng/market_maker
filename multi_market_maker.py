@@ -307,23 +307,40 @@ class MultiMarketMaker:
 
         cursor = None
         startup = True
+        seen_fill_ids = set()  # Track processed fills to avoid reprocessing
 
         while self.running:
             try:
                 # Fetch fills from portfolio endpoint
                 result = await self.api.get_fills(limit=200, cursor=cursor)
                 fills = result.get('fills', [])
-                cursor = result.get('cursor')
+                new_cursor = result.get('cursor')
 
+                # Update cursor only if it changed
+                if new_cursor and new_cursor != cursor:
+                    cursor = new_cursor
 
                 # Startup sync: SKIP all old fills, only process NEW ones going forward
                 if startup:
+                    # Mark all current fills as seen
+                    for fill in fills:
+                        fill_id = fill.get('fill_id')
+                        if fill_id:
+                            seen_fill_ids.add(fill_id)
                     startup = False
-                    print(f"📥 Startup: skipping {len(fills)} old fills, will process new fills going forward")
-                    continue  # Skip all fills on first cycle
+                    print(f"📥 Startup: marked {len(fills)} old fills as seen, will only process new fills")
+                    continue
 
-                # Route fills to correct books
+                # Only process NEW fills (not seen before)
+                new_fills = []
                 for fill in fills:
+                    fill_id = fill.get('fill_id')
+                    if fill_id and fill_id not in seen_fill_ids:
+                        seen_fill_ids.add(fill_id)
+                        new_fills.append(fill)
+
+                # Route NEW fills to correct books
+                for fill in new_fills:
                     await self._route_fill(fill)
 
             except Exception as e:
