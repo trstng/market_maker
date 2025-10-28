@@ -349,7 +349,7 @@ class MultiMarketMaker:
                 prev_filled = book.orders.active_bid.get('filled_count', 0)
                 new_fills = filled_count - prev_filled
 
-                if new_fills > 0:
+                if new_fills > 0 and filled_count > 0:  # Must have actual fills
                     # New fill detected! Create fill object and process it
                     print(f"[{book.ticker}] 🟢 BID FILL: {new_fills} contracts @ {price}¢ (total: {filled_count}/{total_count})")
 
@@ -371,9 +371,9 @@ class MultiMarketMaker:
                     # Update tracked filled_count
                     book.orders.active_bid['filled_count'] = filled_count
 
-                # Clear order if fully filled or cancelled
-                if order_status in ['filled', 'executed', 'cancelled'] or filled_count == total_count:
-                    if filled_count == total_count:
+                # ONLY clear if status explicitly says filled/cancelled AND we have valid data
+                if order_status in ['filled', 'executed', 'cancelled']:
+                    if filled_count > 0:
                         print(f"[{book.ticker}] BID order fully filled ({filled_count}/{total_count})")
                     book.orders.clear_active_bid()
 
@@ -397,7 +397,7 @@ class MultiMarketMaker:
                 prev_filled = book.orders.active_ask.get('filled_count', 0)
                 new_fills = filled_count - prev_filled
 
-                if new_fills > 0:
+                if new_fills > 0 and filled_count > 0:  # Must have actual fills
                     # New fill detected! Create fill object and process it
                     print(f"[{book.ticker}] 🔴 ASK FILL: {new_fills} contracts @ {price}¢ (total: {filled_count}/{total_count})")
 
@@ -419,9 +419,9 @@ class MultiMarketMaker:
                     # Update tracked filled_count
                     book.orders.active_ask['filled_count'] = filled_count
 
-                # Clear order if fully filled or cancelled
-                if order_status in ['filled', 'executed', 'cancelled'] or filled_count == total_count:
-                    if filled_count == total_count:
+                # ONLY clear if status explicitly says filled/cancelled AND we have valid data
+                if order_status in ['filled', 'executed', 'cancelled']:
+                    if filled_count > 0:
                         print(f"[{book.ticker}] ASK order fully filled ({filled_count}/{total_count})")
                     book.orders.clear_active_ask()
 
