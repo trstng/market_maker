@@ -315,8 +315,20 @@ class MultiMarketMaker:
 
                 # Startup sync: only process recent fills (last 5 min)
                 if startup and fills:
-                    now = int(time.time())
-                    fills = [f for f in fills if now - int(f.get('created_time', 0)) < 300]
+                    from datetime import datetime, timezone
+                    now = time.time()
+
+                    def parse_timestamp(ts_str):
+                        """Parse ISO timestamp or Unix timestamp."""
+                        if isinstance(ts_str, (int, float)):
+                            return ts_str
+                        try:
+                            dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                            return dt.timestamp()
+                        except:
+                            return 0
+
+                    fills = [f for f in fills if now - parse_timestamp(f.get('created_time', 0)) < 300]
                     startup = False
                     print(f"📥 Processing {len(fills)} recent fills from startup")
 
