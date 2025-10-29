@@ -117,6 +117,14 @@ class AsyncBotConfig:
     CB_SKEW_MULTIPLIER = 1.25  # Relax thresholds by 25% when holding inventory
     CB_TIGHT_SPREAD_MULTIPLIER = 0.8  # Tighten thresholds by 20% when spread is 1 tick
 
+    # Pyramiding controls (position accumulation)
+    ALLOW_PYRAMIDING = True
+    PYRAMID_MAX_CONTRACTS = 20        # Match backtest cap
+    PYRAMID_SIZE_PER_FILL = 2         # Contracts per layer (backtest shows qty=2)
+    PYRAMID_STEP_C = 2                # Grid step in cents between layers
+    PYRAMID_REENTRY_COOLDOWN_S = 8    # Seconds between re-entry fills
+    PYRAMID_USE_VWAP_GRID = True      # True=grid from VWAP, False=from last fill
+
     # ======================================================================
     # Paper Trading Guardrails & Safety Features
     # ======================================================================
