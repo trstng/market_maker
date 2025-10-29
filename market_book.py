@@ -575,14 +575,29 @@ class MarketBook:
         Tries to improve by 1-2 ticks if depth conditions allow, with dwell timer.
         Falls back to touch if not filled within dwell period.
         """
-        if self.best_bid is None or self.best_ask is None:
-            # No book data, just flatten at mid
-            await self._flatten(self.mid_ema, int(time.time()), "sweet_spot_no_book")
-            await self._cancel_both()
-            return
-
         net = self.inventory.net_contracts
         qty_to_exit = abs(net)
+
+        if self.best_bid is None or self.best_ask is None:
+            # No book data, use mid as fallback price
+            exit_price = self.mid_ema
+            if self.quote_state == QuoteState.SKEW_LONG:
+                print(f"[{self.ticker}] Sweet-spot exit: no book data, selling at mid ${exit_price:.4f}")
+                success = await self._place_ioc_order(exit_price, qty_to_exit, "sell")
+            else:  # SKEW_SHORT
+                print(f"[{self.ticker}] Sweet-spot exit: no book data, buying at mid ${exit_price:.4f}")
+                success = await self._place_ioc_order(exit_price, qty_to_exit, "buy")
+
+            if not success:
+                print(f"[{self.ticker}] 🚨 CRITICAL: Sweet spot exit order FAILED - position still open!")
+                # Send alert to Discord if configured
+                await self.portfolio_q.put({
+                    'type': 'trigger',
+                    'ticker': self.ticker,
+                    'reason': 'exit_order_failed',
+                    'pnl': 0
+                })
+            return
 
         spread_ticks = int((self.best_ask - self.best_bid) / (self.config.TICK_C / 100))
 
@@ -1065,7 +1080,7 @@ class MarketBook:
                 })
                 print(f"[{self.ticker}] ASK placed: {qty} @ ${price:.4f} ({cents}¢)")
 
-    async def _place_ioc_order(self, price: float, qty: int, action: str):
+    async def _place_ioc_order(self, price: float, qty: int, action: str) -> bool:
         """
         NEW: Place IOC (Immediate-Or-Cancel) order for forced exits.
 
@@ -1078,10 +1093,15 @@ class MarketBook:
             price: Price in dollars
             qty: Quantity in contracts
             action: 'buy' or 'sell'
+
+        Returns:
+            True if order placed successfully (or in paper mode), False otherwise
         """
         if not self.quoting_enabled:
-            print(f"[{self.ticker}] IOC order skipped (paper mode)")
-            return
+            print(f"[{self.ticker}] IOC order: paper mode - manually flattening at ${price:.4f}")
+            # In paper mode, manually flatten since no real fill will come back
+            await self._flatten(price, int(time.time()), "paper_mode_exit")
+            return True
 
         cents = int(round(price * 100))
         coid = make_coid("MMv2-IOC", self.ticker)
@@ -1112,11 +1132,14 @@ class MarketBook:
                     "ticker": self.ticker,
                     "side": action
                 })
+                return True
             else:
-                print(f"[{self.ticker}] ⚠️  IOC order failed: {od}")
+                print(f"[{self.ticker}] ⚠️  IOC order failed - bad response: {od}")
+                return False
 
         except Exception as e:
             print(f"[{self.ticker}] ❌ IOC order error: {e}")
+            return False
 
     async def _flatten(self, exit_px: float, ts: int, reason: str):
         """
