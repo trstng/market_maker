@@ -4,6 +4,7 @@ Discovers today's markets and trades them all simultaneously
 """
 import asyncio
 import sys
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -58,6 +59,79 @@ class AsyncBotConfig:
     # Portfolio governors (new)
     MAX_HOT_MARKETS = getattr(settings, 'max_hot_markets', 8)
     MAX_MARKETS_TO_TRADE = getattr(settings, 'max_markets_to_trade', 2)  # Start with 2 for testing
+
+    # ======================================================================
+    # NEW: Edge-Locked Market Making Parameters
+    # ======================================================================
+
+    # Fee & TP calculation
+    TP_MIN_EDGE_C = 2  # Minimum edge in cents (after fees)
+    MAKER_FEE_C = 1.75  # Approximate maker fee in cents
+    EXIT_FEE_C = 1.75  # Approximate exit fee in cents
+    TICK_C = 1  # Tick size in cents
+
+    # Timing windows
+    SWEET_SPOT_MIN_S = 8 * 60  # 8 minutes - start of optimal exit window
+    SWEET_SPOT_MAX_S = 12 * 60  # 12 minutes - end of optimal exit window
+    MAX_AGE_SECONDS = 40 * 60  # 40 minutes - hard cap for forced exit
+
+    # MAE adaptive trimming
+    MAE_TRIM_THRESHOLD_C = 10  # Start trimming at 10¢ MAE
+    MAE_HARD_CAP_C = 18  # Maximum MAE before full trim (50%)
+    MAE_TRIM_PCT_MIN = 0.25  # Minimum trim percentage (25%)
+    MAE_TRIM_PCT_MAX = 0.50  # Maximum trim percentage (50%)
+    TRIM_COOLDOWN_S = 30  # Seconds between trim actions
+
+    # Price-selective gating (per-market overrides)
+    DEFAULT_PRICE_ENTRY_LOW = 0.48  # Only buy below this price
+    DEFAULT_PRICE_ENTRY_HIGH = 0.65  # Only sell above this price
+    MARKET_THRESHOLDS = {
+        "NHL": {"low": 0.48, "high": 0.65},
+        "NFL": {"low": 0.44, "high": 0.72},
+        "CFB": {"low": 0.42, "high": 0.75},
+    }
+
+    # Hysteresis & cooldown
+    HYSTERESIS_TICKS = 2  # Minimum tick displacement before replacing order
+    BASE_COOLDOWN_FLAT_MS = 300  # Cooldown when flat (ms)
+    BASE_COOLDOWN_SKEW_MS = 2000  # Base cooldown when holding inventory (ms)
+    COOLDOWN_PER_CONTRACT_MS = 50  # Additional cooldown per contract held
+    MAX_COOLDOWN_MS = 5000  # Maximum cooldown cap
+
+    # Sweet-spot exit depth rules
+    DEPTH_MULTIPLE_1TICK = 3  # Depth must be 3x exit size for 1-tick improvement
+    DEPTH_MIN_1TICK = 50  # Minimum depth of 50 contracts for 1-tick improvement
+    DEPTH_MULTIPLE_2TICK = 5  # Depth must be 5x exit size for 2-tick improvement
+    DEPTH_MIN_2TICK = 100  # Minimum depth of 100 contracts for 2-tick improvement
+    EXIT_DWELL_BASE_MS = 250  # Base dwell time for improved exits
+    EXIT_DWELL_PER_CONTRACT_MS = 50  # Additional dwell per contract
+    EXIT_DWELL_MAX_MS = 1500  # Maximum dwell time
+
+    # Circuit breaker (2-tier, rolling windows)
+    CB_TIER1_30S = 12  # Soft brake: 12 cancels in 30s
+    CB_TIER1_60S = 18  # Soft brake: 18 cancels in 60s
+    CB_TIER2_30S = 16  # Hard brake: 16 cancels in 30s
+    CB_TIER2_60S = 24  # Hard brake: 24 cancels in 60s
+    CB_SOFT_BRAKE_S = 12  # Soft brake duration (seconds)
+    CB_HARD_BRAKE_S = 30  # Hard brake duration (seconds)
+    CB_SKEW_MULTIPLIER = 1.25  # Relax thresholds by 25% when holding inventory
+    CB_TIGHT_SPREAD_MULTIPLIER = 0.8  # Tighten thresholds by 20% when spread is 1 tick
+
+    # ======================================================================
+    # Paper Trading Guardrails & Safety Features
+    # ======================================================================
+
+    # Shadow mode (log proposed quotes without sending to exchange)
+    SHADOW_MODE = os.getenv('SHADOW_MODE', 'false').lower() == 'true'
+
+    # Inventory limits
+    MAX_INVENTORY_PER_MARKET = getattr(settings, 'max_inventory_per_market', 50)
+    MAX_GLOBAL_INVENTORY = getattr(settings, 'max_global_inventory', 100)
+    MAX_TIME_AT_RISK_S = 60 * 60  # 60 minutes (stricter than 40m hard cap for safety)
+
+    # Kill switches (can be toggled via env vars)
+    DISABLE_NEW_QUOTES = os.getenv('DISABLE_NEW_QUOTES', 'false').lower() == 'true'
+    USE_LEGACY_LOGIC = os.getenv('USE_LEGACY_LOGIC', 'false').lower() == 'true'
 
 
 async def main():
