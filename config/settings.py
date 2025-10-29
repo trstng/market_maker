@@ -27,6 +27,13 @@ class Settings:
         # Discord webhook for alerts
         self.discord_webhook_url: Optional[str] = os.getenv('DISCORD_WEBHOOK_URL', None)
 
+        # Trading mode and limits (for Railway deployment)
+        self.live_trading_enabled: bool = os.getenv('LIVE_TRADING_ENABLED', 'true').lower() == 'true'
+        self.max_markets_to_trade: int = int(os.getenv('MAX_MARKETS_TO_TRADE', '2'))
+        self.max_inventory_per_market: int = int(os.getenv('MAX_INVENTORY_PER_MARKET', '50'))
+        self.max_global_inventory: int = int(os.getenv('MAX_GLOBAL_INVENTORY', '100'))
+        self.max_hot_markets: int = int(os.getenv('MAX_HOT_MARKETS', '8'))
+
     def validate(self) -> bool:
         """Validate that required settings are present"""
         errors = []
