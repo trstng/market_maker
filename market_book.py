@@ -554,7 +554,7 @@ class MarketBook:
         if self.quote_state == QuoteState.FLAT:
             return False, "", None
 
-        age_s = self.inventory.oldest_fill_age()
+        age_s = self.inventory.oldest_fill_age(int(time.time()))
         if age_s is None:
             return False, "", None
 
@@ -626,7 +626,7 @@ class MarketBook:
             self._log_event("sweet_spot_exit",
                           qty=qty_to_exit,
                           exit_price=round(exit_price, 4),
-                          age_s=self.inventory.oldest_fill_age(),
+                          age_s=self.inventory.oldest_fill_age(int(time.time())),
                           spread_ticks=spread_ticks,
                           depth=depth_at_touch)
 
@@ -693,7 +693,7 @@ class MarketBook:
         if self.quote_state == QuoteState.FLAT:
             return False, 0, 0
 
-        age_s = self.inventory.oldest_fill_age()
+        age_s = self.inventory.oldest_fill_age(int(time.time()))
         if age_s is None:
             return False, 0, 0
 
