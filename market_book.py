@@ -221,13 +221,11 @@ class MarketBook:
 
     async def _on_market_msg(self, msg: Dict):
         """
-        NEW: Process incoming market message with integrated exit logic.
+        Process incoming market message with DWE=500 + MAE failsafe exit logic.
 
-        Priority order:
-        1. Age-based exits (sweet-spot, hard-cap)
-        2. MAE trimming
-        3. Risk policy flatten (legacy)
-        4. Normal quoting
+        Priority order (BACKTEST-EXACT):
+        1. Risk policy flatten (DWE ≥ 500 OR MAE ≥ 8¢)
+        2. Normal quoting
         """
         ts = msg.get('timestamp', int(time.time()))
         price_c = msg.get('price')
@@ -245,38 +243,7 @@ class MarketBook:
             self.mid_ema = alpha * px + (1 - alpha) * self.mid_ema
 
         # ======================================================================
-        # NEW: Age-Based Exit Windows (Highest Priority)
-        # ======================================================================
-        should_exit, exit_reason, exit_mode = self.check_exit_windows()
-        if should_exit:
-            if exit_mode == "hard_cap":
-                # Force exit at 40 min (bypasses all other logic)
-                await self.execute_hard_cap_exit()
-                await self._cancel_both()
-                print(f"[{self.ticker}] {exit_reason}")
-                return
-            elif exit_mode == "sweet_spot":
-                # Smart exit during 8-12 min window
-                await self.execute_sweet_spot_exit()
-                await self._cancel_both()
-                print(f"[{self.ticker}] {exit_reason}")
-                return
-
-        # ======================================================================
-        # NEW: MAE Trimming (Second Priority)
-        # ======================================================================
-        should_trim, trim_pct, trim_qty = self.check_mae_trim(px)
-        if should_trim:
-            mae_c = abs(px - self.inventory.vwap_entry) * 100
-            print(f"[{self.ticker}] MAE trim triggered: {mae_c:.1f}¢ MAE, trimming {trim_pct*100:.0f}% ({trim_qty} contracts)")
-            await self.execute_mae_trim(trim_qty, px)
-            # After trim, recompute VWAP and update TP quotes
-            quote_bid, quote_ask = self._compute_quotes()
-            await self._update_quotes_with_exception(quote_bid, quote_ask, self.config.SIZE_PER_FILL)
-            return
-
-        # ======================================================================
-        # Legacy Risk Policy (Duration-Weighted, MAE Failsafe)
+        # ONLY Exit Logic: DWE=500 + MAE Failsafe (matches backtest)
         # ======================================================================
         should_flatten, reason = self.policy.should_flatten(
             self.inventory,
