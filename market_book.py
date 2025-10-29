@@ -113,6 +113,10 @@ class MarketBook:
         # MAE trim tracking
         self.last_trim_ts: float = 0.0
 
+        # Pyramiding state tracking
+        self.last_reentry_ts: float = 0.0
+        self.last_entry_price: Optional[float] = None
+
         # Circuit breaker tracking (2-tier, rolling windows)
         self.cancel_timestamps_30s: deque = deque()
         self.cancel_timestamps_60s: deque = deque()
@@ -155,6 +159,13 @@ class MarketBook:
         print(f"Circuit Breaker:")
         print(f"  Soft: {self.config.CB_TIER1_30S}/30s or {self.config.CB_TIER1_60S}/60s")
         print(f"  Hard: {self.config.CB_TIER2_30S}/30s or {self.config.CB_TIER2_60S}/60s")
+        print(f"Pyramiding:")
+        print(f"  Enabled: {self.config.ALLOW_PYRAMIDING}")
+        print(f"  Max Contracts: {self.config.PYRAMID_MAX_CONTRACTS}")
+        print(f"  Size Per Layer: {self.config.PYRAMID_SIZE_PER_FILL}")
+        print(f"  Grid Step: {self.config.PYRAMID_STEP_C}¢")
+        print(f"  Re-entry Cooldown: {self.config.PYRAMID_REENTRY_COOLDOWN_S}s")
+        print(f"  Grid Anchor: {'VWAP' if self.config.PYRAMID_USE_VWAP_GRID else 'Last Fill'}")
         print(f"{'='*60}\n")
 
     def _log_event(self, action: str, **kwargs):
@@ -282,8 +293,10 @@ class MarketBook:
             if quote_ask is not None:
                 quote_ask = self.round_to_tick(quote_ask + tick)  # Widen by 1 tick
 
-        # Update orders on exchange
-        await self._update_quotes(quote_bid, quote_ask, self.config.SIZE_PER_FILL)
+        # Update orders on exchange with dynamic sizing
+        size = (self.config.SIZE_PER_FILL if self.quote_state == QuoteState.FLAT
+                else self.config.PYRAMID_SIZE_PER_FILL)
+        await self._update_quotes(quote_bid, quote_ask, size)
 
     def _compute_quotes(self) -> Tuple[Optional[float], Optional[float]]:
         """
@@ -346,7 +359,7 @@ class MarketBook:
             return (bid, ask)
 
         # ======================================================================
-        # SKEW_LONG Mode: ASK-only at VWAP + TP offset
+        # SKEW_LONG Mode: ASK (TP exit) + optional BID (pyramiding re-entry)
         # ======================================================================
         elif self.quote_state == QuoteState.SKEW_LONG:
             vwap = self.inventory.vwap_entry
@@ -370,10 +383,37 @@ class MarketBook:
             if self.best_ask is not None:
                 tp_price = max(tp_price, self.best_ask)
 
-            return (None, tp_price)
+            # PYRAMIDING RE-ENTRY (NEW)
+            bid = None
+            if (self.config.ALLOW_PYRAMIDING and
+                abs(self.inventory.net_contracts) < self.config.PYRAMID_MAX_CONTRACTS):
+
+                # Cooldown gate
+                if time.time() - self.last_reentry_ts >= self.config.PYRAMID_REENTRY_COOLDOWN_S:
+                    step = (self.config.PYRAMID_STEP_C / 100)
+
+                    # Grid anchor: VWAP or last fill price
+                    entry_anchor = vwap if self.config.PYRAMID_USE_VWAP_GRID else (self.last_entry_price or vwap)
+
+                    # Calculate layer number (net=2→layer 0, net=4→layer 1, etc.)
+                    layers = max(0, abs(self.inventory.net_contracts) // self.config.PYRAMID_SIZE_PER_FILL)
+
+                    # Next layer: step below anchor
+                    desired_bid = entry_anchor - step * (layers + 1)
+
+                    # Price-selective gate (only buy below low_gate)
+                    low_gate, _ = self.get_entry_thresholds()
+                    if self.mid_ema <= low_gate and self.mid_ema <= desired_bid:
+                        bid = self.round_to_tick(min(desired_bid, self.mid_ema - self.config.BASE_SPREAD))
+
+                        # Never cross touch
+                        if self.best_ask is not None and bid >= self.best_ask:
+                            bid = self.round_to_tick(self.best_ask - self.config.TICK_C / 100)
+
+            return (bid, tp_price)
 
         # ======================================================================
-        # SKEW_SHORT Mode: BID-only at VWAP - TP offset
+        # SKEW_SHORT Mode: BID (TP exit) + optional ASK (pyramiding re-entry)
         # ======================================================================
         elif self.quote_state == QuoteState.SKEW_SHORT:
             vwap = self.inventory.vwap_entry
@@ -397,7 +437,26 @@ class MarketBook:
             if self.best_bid is not None:
                 tp_price = min(tp_price, self.best_bid)
 
-            return (tp_price, None)
+            # PYRAMIDING RE-ENTRY (NEW)
+            ask = None
+            if (self.config.ALLOW_PYRAMIDING and
+                abs(self.inventory.net_contracts) < self.config.PYRAMID_MAX_CONTRACTS):
+
+                if time.time() - self.last_reentry_ts >= self.config.PYRAMID_REENTRY_COOLDOWN_S:
+                    step = (self.config.PYRAMID_STEP_C / 100)
+                    entry_anchor = vwap if self.config.PYRAMID_USE_VWAP_GRID else (self.last_entry_price or vwap)
+                    layers = max(0, abs(self.inventory.net_contracts) // self.config.PYRAMID_SIZE_PER_FILL)
+                    desired_ask = entry_anchor + step * (layers + 1)
+
+                    # Price-selective gate (only sell above high_gate)
+                    _, high_gate = self.get_entry_thresholds()
+                    if self.mid_ema >= high_gate and self.mid_ema >= desired_ask:
+                        ask = self.round_to_tick(max(desired_ask, self.mid_ema + self.config.BASE_SPREAD))
+
+                        if self.best_bid is not None and ask <= self.best_bid:
+                            ask = self.round_to_tick(self.best_bid + self.config.TICK_C / 100)
+
+            return (tp_price, ask)
 
         return (None, None)
 
@@ -1204,6 +1263,9 @@ class MarketBook:
         if action == 'buy' and side == 'yes':
             # Opening long position
             self._execute_fill(count, price, timestamp, 'long')
+            # Track for pyramiding re-entry cooldown
+            self.last_entry_price = price
+            self.last_reentry_ts = time.time()
         elif action == 'sell' and side == 'yes':
             # Closing long position
             if self.inventory.net_contracts > 0:
@@ -1212,6 +1274,9 @@ class MarketBook:
         elif action == 'buy' and side == 'no':
             # Opening short position
             self._execute_fill(count, price, timestamp, 'short')
+            # Track for pyramiding re-entry cooldown
+            self.last_entry_price = price
+            self.last_reentry_ts = time.time()
         elif action == 'sell' and side == 'no':
             # Closing short position
             if self.inventory.net_contracts < 0:
@@ -1256,7 +1321,9 @@ class MarketBook:
 
             # Immediately recompute quotes with exception to bypass cooldown
             quote_bid, quote_ask = self._compute_quotes()
-            await self._update_quotes_with_exception(quote_bid, quote_ask, self.config.SIZE_PER_FILL)
+            size = (self.config.SIZE_PER_FILL if self.quote_state == QuoteState.FLAT
+                    else self.config.PYRAMID_SIZE_PER_FILL)
+            await self._update_quotes_with_exception(quote_bid, quote_ask, size)
 
     async def _update_quotes_with_exception(
         self,

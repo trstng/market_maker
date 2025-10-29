@@ -74,6 +74,15 @@ class BotConfig:
     # Discord webhook for alerts
     DISCORD_WEBHOOK_URL = settings.discord_webhook_url
 
+    # Pyramiding controls
+    ALLOW_PYRAMIDING = True
+    PYRAMID_MAX_CONTRACTS = 20        # Match backtest cap
+    PYRAMID_SIZE_PER_FILL = 2         # Contracts per layer (backtest shows qty=2)
+    PYRAMID_STEP_C = 2                # Grid step in cents between layers
+    PYRAMID_REENTRY_COOLDOWN_S = 8    # Seconds between re-entry fills
+    PYRAMID_USE_VWAP_GRID = True      # True=grid from VWAP, False=from last fill
+    TICK_C = 1                        # Tick size in cents
+
 
 # ============================================================================
 # UTILITY FUNCTIONS
