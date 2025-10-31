@@ -107,12 +107,6 @@ class MarketBook:
         self.quote_state: QuoteState = QuoteState.FLAT
         self.last_state_change_ts: float = 0.0
 
-        # VWAP-anchored TP tracking (only update when VWAP shifts by ≥1 tick)
-        self.last_tp_vwap: Optional[float] = None
-
-        # MAE trim tracking
-        self.last_trim_ts: float = 0.0
-
         # Pyramiding state tracking
         self.last_reentry_ts: float = 0.0
         self.last_entry_price: Optional[float] = None
@@ -153,9 +147,6 @@ class MarketBook:
         print(f"Price Gates:")
         print(f"  Entry Low: ${low_gate:.2f} (only buy below)")
         print(f"  Entry High: ${high_gate:.2f} (only sell above)")
-        print(f"Exit Windows:")
-        print(f"  Sweet Spot: {self.config.SWEET_SPOT_MIN_S/60:.0f}-{self.config.SWEET_SPOT_MAX_S/60:.0f} min")
-        print(f"  Hard Cap: {self.config.MAX_AGE_SECONDS/60:.0f} min")
         print(f"Circuit Breaker:")
         print(f"  Soft: {self.config.CB_TIER1_30S}/30s or {self.config.CB_TIER1_60S}/60s")
         print(f"  Hard: {self.config.CB_TIER2_30S}/30s or {self.config.CB_TIER2_60S}/60s")
@@ -327,7 +318,6 @@ class MarketBook:
         if current_state != self.quote_state:
             self.quote_state = current_state
             self.last_state_change_ts = time.time()
-            self.last_tp_vwap = None  # Force TP recalc
 
         # ======================================================================
         # FLAT Mode: Quote both sides in profitable zones
@@ -359,31 +349,26 @@ class MarketBook:
             return (bid, ask)
 
         # ======================================================================
-        # SKEW_LONG Mode: ASK (TP exit) + optional BID (pyramiding re-entry)
+        # SKEW_LONG Mode: ASK (passive exit) + optional BID (pyramiding re-entry)
         # ======================================================================
         elif self.quote_state == QuoteState.SKEW_LONG:
-            vwap = self.inventory.vwap_entry
-            if vwap is None:
+            mid = self.mid_ema
+            if mid is None:
                 return (None, None)
 
-            # Check if VWAP changed by ≥1 tick (hysteresis for TP updates)
-            vwap_changed = (
-                self.last_tp_vwap is None or
-                abs(vwap - self.last_tp_vwap) >= (self.config.TICK_C / 100)
-            )
+            # Calculate inventory skew factor (matches backtest logic)
+            skew_factor = abs(self.inventory.net_contracts) / self.config.PYRAMID_MAX_CONTRACTS
 
-            if vwap_changed:
-                self.last_tp_vwap = vwap
+            # Quote ask with widened spread (passive exit as market trades against us)
+            # Backtest: quote_ask = mid + base_spread * (1 + skew)
+            base_spread = self.config.BASE_SPREAD
+            ask = self.round_to_tick(mid + base_spread * (1 + skew_factor))
 
-            # Calculate TP price (VWAP + 7¢ with default params)
-            tp_offset_dollars = self.tp_offset_c() / 100  # Convert cents to dollars
-            tp_price = self.round_to_tick(vwap + tp_offset_dollars)
+            # Ensure ask never inside touch
+            if self.best_bid is not None and ask <= self.best_bid:
+                ask = self.round_to_tick(self.best_bid + self.config.TICK_C / 100)
 
-            # Ensure TP never inside touch (if we have book data)
-            if self.best_ask is not None:
-                tp_price = max(tp_price, self.best_ask)
-
-            # PYRAMIDING RE-ENTRY (NEW)
+            # PYRAMIDING RE-ENTRY on bid side (keep existing logic)
             bid = None
             if (self.config.ALLOW_PYRAMIDING and
                 abs(self.inventory.net_contracts) < self.config.PYRAMID_MAX_CONTRACTS):
@@ -391,6 +376,7 @@ class MarketBook:
                 # Cooldown gate
                 if time.time() - self.last_reentry_ts >= self.config.PYRAMID_REENTRY_COOLDOWN_S:
                     step = (self.config.PYRAMID_STEP_C / 100)
+                    vwap = self.inventory.vwap_entry or mid
 
                     # Grid anchor: VWAP or last fill price
                     entry_anchor = vwap if self.config.PYRAMID_USE_VWAP_GRID else (self.last_entry_price or vwap)
@@ -410,40 +396,36 @@ class MarketBook:
                         if self.best_ask is not None and bid >= self.best_ask:
                             bid = self.round_to_tick(self.best_ask - self.config.TICK_C / 100)
 
-            return (bid, tp_price)
+            return (bid, ask)
 
         # ======================================================================
-        # SKEW_SHORT Mode: BID (TP exit) + optional ASK (pyramiding re-entry)
+        # SKEW_SHORT Mode: BID (passive exit) + optional ASK (pyramiding re-entry)
         # ======================================================================
         elif self.quote_state == QuoteState.SKEW_SHORT:
-            vwap = self.inventory.vwap_entry
-            if vwap is None:
+            mid = self.mid_ema
+            if mid is None:
                 return (None, None)
 
-            # Check if VWAP changed by ≥1 tick
-            vwap_changed = (
-                self.last_tp_vwap is None or
-                abs(vwap - self.last_tp_vwap) >= (self.config.TICK_C / 100)
-            )
+            # Calculate inventory skew factor (matches backtest logic)
+            skew_factor = abs(self.inventory.net_contracts) / self.config.PYRAMID_MAX_CONTRACTS
 
-            if vwap_changed:
-                self.last_tp_vwap = vwap
+            # Quote bid with widened spread (passive exit as market trades against us)
+            # Backtest: quote_bid = mid - base_spread * (1 + skew)
+            base_spread = self.config.BASE_SPREAD
+            bid = self.round_to_tick(mid - base_spread * (1 + skew_factor))
 
-            # Calculate TP price (VWAP - 7¢ with default params)
-            tp_offset_dollars = self.tp_offset_c() / 100
-            tp_price = self.round_to_tick(vwap - tp_offset_dollars)
+            # Ensure bid never inside touch
+            if self.best_ask is not None and bid >= self.best_ask:
+                bid = self.round_to_tick(self.best_ask - self.config.TICK_C / 100)
 
-            # Ensure TP never inside touch (if we have book data)
-            if self.best_bid is not None:
-                tp_price = min(tp_price, self.best_bid)
-
-            # PYRAMIDING RE-ENTRY (NEW)
+            # PYRAMIDING RE-ENTRY on ask side (keep existing logic)
             ask = None
             if (self.config.ALLOW_PYRAMIDING and
                 abs(self.inventory.net_contracts) < self.config.PYRAMID_MAX_CONTRACTS):
 
                 if time.time() - self.last_reentry_ts >= self.config.PYRAMID_REENTRY_COOLDOWN_S:
                     step = (self.config.PYRAMID_STEP_C / 100)
+                    vwap = self.inventory.vwap_entry or mid
                     entry_anchor = vwap if self.config.PYRAMID_USE_VWAP_GRID else (self.last_entry_price or vwap)
                     layers = max(0, abs(self.inventory.net_contracts) // self.config.PYRAMID_SIZE_PER_FILL)
                     desired_ask = entry_anchor + step * (layers + 1)
@@ -456,7 +438,7 @@ class MarketBook:
                         if self.best_bid is not None and ask <= self.best_bid:
                             ask = self.round_to_tick(self.best_bid + self.config.TICK_C / 100)
 
-            return (tp_price, ask)
+            return (bid, ask)
 
         return (None, None)
 
@@ -566,236 +548,7 @@ class MarketBook:
         return False
 
     # ======================================================================
-    # NEW: Age-Based Exits & MAE Trimming
-    # ======================================================================
-
-    def check_exit_windows(self) -> Tuple[bool, str, Optional[str]]:
-        """
-        Check if position should be exited based on age.
-
-        Returns:
-            (should_exit, reason, exit_mode)
-            exit_mode: "sweet_spot", "hard_cap", or None
-        """
-        if self.quote_state == QuoteState.FLAT:
-            return False, "", None
-
-        age_s = self.inventory.oldest_fill_age(int(time.time()))
-        if age_s is None:
-            return False, "", None
-
-        # Hard cap (40 min) - force exit regardless of conditions
-        if age_s >= self.config.MAX_AGE_SECONDS:
-            return True, f"Hard cap exit ({age_s/60:.1f}m)", "hard_cap"
-
-        # Sweet spot (8-12 min) - optimal exit window
-        if self.config.SWEET_SPOT_MIN_S <= age_s <= self.config.SWEET_SPOT_MAX_S:
-            return True, f"Sweet spot exit ({age_s/60:.1f}m)", "sweet_spot"
-
-        return False, "", None
-
-    async def execute_sweet_spot_exit(self):
-        """
-        Execute smart exit during sweet-spot window with depth-aware pricing.
-
-        Tries to improve by 1-2 ticks if depth conditions allow, with dwell timer.
-        Falls back to touch if not filled within dwell period.
-        """
-        net = self.inventory.net_contracts
-        qty_to_exit = abs(net)
-
-        if self.best_bid is None or self.best_ask is None:
-            # No book data, use mid as fallback price
-            exit_price = self.mid_ema
-            if self.quote_state == QuoteState.SKEW_LONG:
-                print(f"[{self.ticker}] Sweet-spot exit: no book data, selling at mid ${exit_price:.4f}")
-                success = await self._place_ioc_order(exit_price, qty_to_exit, "sell")
-            else:  # SKEW_SHORT
-                print(f"[{self.ticker}] Sweet-spot exit: no book data, buying at mid ${exit_price:.4f}")
-                success = await self._place_ioc_order(exit_price, qty_to_exit, "buy")
-
-            if not success:
-                print(f"[{self.ticker}] 🚨 CRITICAL: Sweet spot exit order FAILED - position still open!")
-                # Send alert to Discord if configured
-                await self.portfolio_q.put({
-                    'type': 'trigger',
-                    'ticker': self.ticker,
-                    'reason': 'exit_order_failed',
-                    'pnl': 0
-                })
-            return
-
-        spread_ticks = int((self.best_ask - self.best_bid) / (self.config.TICK_C / 100))
-
-        # CRITICAL FIX: Never try to improve in 1-tick spreads
-        if spread_ticks == 1:
-            if self.quote_state == QuoteState.SKEW_LONG:
-                exit_price = self.best_bid
-                print(f"[{self.ticker}] Sweet-spot exit: 1-tick spread, no improvement @ ${exit_price:.4f}")
-                await self._place_ioc_order(exit_price, qty_to_exit, "sell")
-            else:  # SKEW_SHORT
-                exit_price = self.best_ask
-                print(f"[{self.ticker}] Sweet-spot exit: 1-tick spread, no improvement @ ${exit_price:.4f}")
-                await self._place_ioc_order(exit_price, qty_to_exit, "buy")
-            return
-
-        if self.quote_state == QuoteState.SKEW_LONG:
-            # Need to sell - check depth at bid
-            depth_at_touch = self.bid_size
-
-            # Calculate improvement potential
-            can_improve_2tick = (
-                spread_ticks >= 3 and
-                depth_at_touch >= max(self.config.DEPTH_MULTIPLE_2TICK * qty_to_exit, self.config.DEPTH_MIN_2TICK)
-            )
-            can_improve_1tick = (
-                spread_ticks >= 2 and
-                depth_at_touch >= max(self.config.DEPTH_MULTIPLE_1TICK * qty_to_exit, self.config.DEPTH_MIN_1TICK)
-            )
-
-            if can_improve_2tick:
-                exit_price = self.round_to_tick(self.best_bid + 2 * (self.config.TICK_C / 100))
-                print(f"[{self.ticker}] Sweet-spot exit: trying 2 ticks better at ${exit_price:.4f}")
-            elif can_improve_1tick:
-                exit_price = self.round_to_tick(self.best_bid + (self.config.TICK_C / 100))
-                print(f"[{self.ticker}] Sweet-spot exit: trying 1 tick better at ${exit_price:.4f}")
-            else:
-                exit_price = self.best_bid
-                print(f"[{self.ticker}] Sweet-spot exit: at touch ${exit_price:.4f}")
-
-            # Log sweet-spot exit
-            self._log_event("sweet_spot_exit",
-                          qty=qty_to_exit,
-                          exit_price=round(exit_price, 4),
-                          age_s=self.inventory.oldest_fill_age(int(time.time())),
-                          spread_ticks=spread_ticks,
-                          depth=depth_at_touch)
-
-            # Place IOC exit order
-            await self._place_ioc_order(exit_price, qty_to_exit, "sell")
-
-        else:  # SKEW_SHORT
-            # Need to buy - check depth at ask
-            depth_at_touch = self.ask_size
-
-            can_improve_2tick = (
-                spread_ticks >= 3 and
-                depth_at_touch >= max(self.config.DEPTH_MULTIPLE_2TICK * qty_to_exit, self.config.DEPTH_MIN_2TICK)
-            )
-            can_improve_1tick = (
-                spread_ticks >= 2 and
-                depth_at_touch >= max(self.config.DEPTH_MULTIPLE_1TICK * qty_to_exit, self.config.DEPTH_MIN_1TICK)
-            )
-
-            if can_improve_2tick:
-                exit_price = self.round_to_tick(self.best_ask - 2 * (self.config.TICK_C / 100))
-                print(f"[{self.ticker}] Sweet-spot exit: trying 2 ticks better at ${exit_price:.4f}")
-            elif can_improve_1tick:
-                exit_price = self.round_to_tick(self.best_ask - (self.config.TICK_C / 100))
-                print(f"[{self.ticker}] Sweet-spot exit: trying 1 tick better at ${exit_price:.4f}")
-            else:
-                exit_price = self.best_ask
-                print(f"[{self.ticker}] Sweet-spot exit: at touch ${exit_price:.4f}")
-
-            # Place IOC exit order
-            await self._place_ioc_order(exit_price, qty_to_exit, "buy")
-
-    async def execute_hard_cap_exit(self):
-        """Force exit entire position at hard cap (40 min) using IOC."""
-        if self.quote_state == QuoteState.FLAT:
-            return
-
-        net = self.inventory.net_contracts
-        qty_to_exit = abs(net)
-
-        if self.quote_state == QuoteState.SKEW_LONG:
-            # Sell at best bid (or mid if no book data)
-            exit_price = self.best_bid if self.best_bid is not None else self.mid_ema
-            await self._place_ioc_order(exit_price, qty_to_exit, "sell")
-        else:  # SKEW_SHORT
-            # Buy at best ask (or mid if no book data)
-            exit_price = self.best_ask if self.best_ask is not None else self.mid_ema
-            await self._place_ioc_order(exit_price, qty_to_exit, "buy")
-
-        print(f"[{self.ticker}] Hard cap exit: force flatten {qty_to_exit} @ ${exit_price:.4f}")
-
-    def check_mae_trim(self, mark: float) -> Tuple[bool, float, int]:
-        """
-        Check if adaptive MAE trim needed.
-
-        Trim percentage scales from 25% to 50% based on severity.
-
-        Args:
-            mark: Current market price
-
-        Returns:
-            (should_trim, trim_pct, trim_qty)
-        """
-        if self.quote_state == QuoteState.FLAT:
-            return False, 0, 0
-
-        age_s = self.inventory.oldest_fill_age(int(time.time()))
-        if age_s is None:
-            return False, 0, 0
-
-        # Don't trim if already in sweet-spot window (about to exit anyway)
-        if age_s >= self.config.SWEET_SPOT_MIN_S:
-            return False, 0, 0
-
-        # Check trim cooldown
-        now = time.time()
-        if now - self.last_trim_ts < self.config.TRIM_COOLDOWN_S:
-            return False, 0, 0
-
-        vwap = self.inventory.vwap_entry
-        if vwap is None:
-            return False, 0, 0
-
-        mae_c = abs(mark - vwap) * 100  # Convert to cents
-
-        if mae_c < self.config.MAE_TRIM_THRESHOLD_C:
-            return False, 0, 0
-
-        # Calculate adaptive trim percentage based on severity
-        severity = min(
-            (mae_c - self.config.MAE_TRIM_THRESHOLD_C) /
-            (self.config.MAE_HARD_CAP_C - self.config.MAE_TRIM_THRESHOLD_C),
-            1.0
-        )
-        trim_pct = self.config.MAE_TRIM_PCT_MIN + severity * (
-            self.config.MAE_TRIM_PCT_MAX - self.config.MAE_TRIM_PCT_MIN
-        )
-
-        net = abs(self.inventory.net_contracts)
-        trim_qty = max(1, round(trim_pct * net))  # At least 1 contract
-
-        # Never trim to less than 1 contract remaining - just flatten entirely
-        if net - trim_qty < 1:
-            trim_qty = net
-
-        return True, trim_pct, trim_qty
-
-    async def execute_mae_trim(self, trim_qty: int, mark: float):
-        """
-        Execute MAE trim via IOC order.
-
-        Args:
-            trim_qty: Number of contracts to trim
-            mark: Current market price
-        """
-        if self.quote_state == QuoteState.SKEW_LONG:
-            # Sell to reduce long position
-            await self._place_ioc_order(mark, trim_qty, "sell")
-            print(f"[{self.ticker}] MAE trim: selling {trim_qty} @ ${mark:.4f}")
-        else:  # SKEW_SHORT
-            # Buy to reduce short position
-            await self._place_ioc_order(mark, trim_qty, "buy")
-            print(f"[{self.ticker}] MAE trim: buying {trim_qty} @ ${mark:.4f}")
-
-        self.last_trim_ts = time.time()
-
-    # ======================================================================
-    # NEW: Circuit Breaker (2-Tier Rate Limiting)
+    # Circuit Breaker (2-Tier Rate Limiting)
     # ======================================================================
 
     def track_cancel_or_replace(self, reason: str = "quote"):
@@ -1106,67 +859,6 @@ class MarketBook:
                 })
                 print(f"[{self.ticker}] ASK placed: {qty} @ ${price:.4f} ({cents}¢)")
 
-    async def _place_ioc_order(self, price: float, qty: int, action: str) -> bool:
-        """
-        NEW: Place IOC (Immediate-Or-Cancel) order for forced exits.
-
-        Used for:
-        - Sweet-spot exits (8-12 min)
-        - Hard-cap exits (40 min)
-        - MAE trims
-
-        Args:
-            price: Price in dollars
-            qty: Quantity in contracts
-            action: 'buy' or 'sell'
-
-        Returns:
-            True if order placed successfully (or in paper mode), False otherwise
-        """
-        if not self.quoting_enabled:
-            print(f"[{self.ticker}] IOC order: paper mode - manually flattening at ${price:.4f}")
-            # In paper mode, manually flatten since no real fill will come back
-            await self._flatten(price, int(time.time()), "paper_mode_exit")
-            return True
-
-        cents = int(round(price * 100))
-        coid = make_coid("MMv2-IOC", self.ticker)
-
-        try:
-            # Note: Kalshi API may not support IOC type explicitly
-            # If not supported, use regular order with immediate expectation
-            od = await self.api.place_order(
-                self.ticker,
-                side="yes",
-                action=action,
-                count=qty,
-                price_cents=cents,
-                client_order_id=coid
-                # type="ioc"  # Enable if API supports
-            )
-
-            if od and 'order' in od:
-                order_id = od['order']['order_id']
-                action_emoji = "🟢" if action == "buy" else "🔴"
-                print(f"[{self.ticker}] {action_emoji} IOC {action.upper()}: {qty} @ ${price:.4f} ({cents}¢)")
-
-                # Don't track as active order (it's IOC)
-                # But register for fill processing
-                self.orders.register_order(coid, {
-                    "order_id": order_id,
-                    "strategy_id": "MMv2-IOC",
-                    "ticker": self.ticker,
-                    "side": action
-                })
-                return True
-            else:
-                print(f"[{self.ticker}] ⚠️  IOC order failed - bad response: {od}")
-                return False
-
-        except Exception as e:
-            print(f"[{self.ticker}] ❌ IOC order error: {e}")
-            return False
-
     async def _flatten(self, exit_px: float, ts: int, reason: str):
         """
         Flatten entire inventory (risk policy trigger).
@@ -1309,7 +1001,6 @@ class MarketBook:
         if new_state != old_state:
             self.quote_state = new_state
             self.last_state_change_ts = time.time()
-            self.last_tp_vwap = None  # Force TP recalc
 
             print(f"[{self.ticker}] State transition: {old_state.value} → {new_state.value}")
 

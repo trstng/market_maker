@@ -248,18 +248,19 @@ class InventoryState:
 
 class HybridRiskPolicy:
     """
-    Hybrid inventory risk policy with persistent MAE failsafe.
+    Duration-weighted exposure risk policy (matches backtest).
 
-    Primary: Duration-weighted exposure control
-    Failsafe: MAE 8¢ limit (must persist >8 seconds)
+    Triggers flatten when: sum(|qty| × age_minutes) >= DURATION_WEIGHTED_LIMIT
+
+    MAE failsafe has been DISABLED to match the profitable backtest behavior.
     """
 
     def __init__(self, config: BotConfig):
         self.config = config
 
-        # MAE persistence tracking
-        self.mae_breach_start: Optional[int] = None
-        self.mae_values_in_breach: List[float] = []
+        # MAE persistence tracking (DISABLED - kept for backward compatibility)
+        # self.mae_breach_start: Optional[int] = None
+        # self.mae_values_in_breach: List[float] = []
 
     def should_flatten(
         self,
@@ -274,35 +275,30 @@ class HybridRiskPolicy:
             (should_flatten, reason)
         """
 
-        # Check duration-weighted exposure (primary)
+        # Check duration-weighted exposure (primary and ONLY trigger - matches backtest)
         dwe = inventory.duration_weighted_exposure(current_time)
         if dwe >= self.config.DURATION_WEIGHTED_LIMIT:
-            self._reset_mae_breach()
             return True, f'duration_weighted_{dwe:.0f}'
 
-        # Check MAE failsafe (must persist >8 seconds)
-        mae = inventory.inventory_mae(current_price)
-        mae_threshold = self.config.MAE_FAILSAFE_CENTS / 100  # Convert cents to dollars
-
-        if mae >= mae_threshold:
-            # MAE breach detected
-            if self.mae_breach_start is None:
-                # First breach
-                self.mae_breach_start = current_time
-                self.mae_values_in_breach = [mae]
-            else:
-                # Ongoing breach
-                self.mae_values_in_breach.append(mae)
-                breach_duration = current_time - self.mae_breach_start
-
-                if breach_duration >= self.config.MAE_ACTIVATION_WINDOW_SEC:
-                    # Breach persisted long enough - trigger!
-                    avg_mae = statistics.mean(self.mae_values_in_breach)
-                    self._reset_mae_breach()
-                    return True, f'mae_failsafe_{avg_mae*100:.1f}c_duration_{breach_duration}s'
-        else:
-            # No longer in breach - reset
-            self._reset_mae_breach()
+        # MAE failsafe DISABLED - backtest used duration-weighted only
+        # (Commenting out to match profitable backtest behavior)
+        # mae = inventory.inventory_mae(current_price)
+        # mae_threshold = self.config.MAE_FAILSAFE_CENTS / 100
+        #
+        # if mae >= mae_threshold:
+        #     if self.mae_breach_start is None:
+        #         self.mae_breach_start = current_time
+        #         self.mae_values_in_breach = [mae]
+        #     else:
+        #         self.mae_values_in_breach.append(mae)
+        #         breach_duration = current_time - self.mae_breach_start
+        #
+        #         if breach_duration >= self.config.MAE_ACTIVATION_WINDOW_SEC:
+        #             avg_mae = statistics.mean(self.mae_values_in_breach)
+        #             self._reset_mae_breach()
+        #             return True, f'mae_failsafe_{avg_mae*100:.1f}c_duration_{breach_duration}s'
+        # else:
+        #     self._reset_mae_breach()
 
         return False, None
 
