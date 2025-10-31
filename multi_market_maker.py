@@ -284,8 +284,16 @@ class MultiMarketMaker:
             mid = book.mid_ema
             pnl = book.inventory.realized_pnl
 
-            bid = f"{book.orders.active_bid['qty']}@{int(book.orders.active_bid['price']*100)}¢" if book.orders.active_bid else "None"
-            ask = f"{book.orders.active_ask['qty']}@{int(book.orders.active_ask['price']*100)}¢" if book.orders.active_ask else "None"
+            # Safe formatting with None checks
+            if book.orders.active_bid and book.orders.active_bid.get('price') is not None:
+                bid = f"{book.orders.active_bid['qty']}@{int(book.orders.active_bid['price']*100)}¢"
+            else:
+                bid = "None"
+
+            if book.orders.active_ask and book.orders.active_ask.get('price') is not None:
+                ask = f"{book.orders.active_ask['qty']}@{int(book.orders.active_ask['price']*100)}¢"
+            else:
+                ask = "None"
 
             pos_str = f"{net:+d}" + (f" @ {vwap:.2f}" if vwap else "")
 
@@ -293,17 +301,9 @@ class MultiMarketMaker:
 
     async def _check_portfolio_risk(self):
         """Check for portfolio-level risk conditions."""
-        # Count markets in MAE breach
-        mae_breaches = sum(
-            1 for book in self.books.values()
-            if book.policy.mae_breach_start is not None
-        )
-
-        # If 3+ markets in MAE breach simultaneously, reduce sizes
-        if mae_breaches >= 3:
-            msg = f"🚨 **PORTFOLIO ALERT**\n{mae_breaches} markets in MAE breach"
-            await self._send_discord_alert(msg)
-            print(f"⚠️  Portfolio risk: {mae_breaches} markets in MAE breach")
+        # MAE breach check DISABLED - MAE failsafe was removed to match backtest
+        # (Backtest used duration-weighted exposure only)
+        pass
 
     async def fill_reconciliation_loop(self):
         """
