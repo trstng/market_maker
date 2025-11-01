@@ -960,9 +960,11 @@ class MarketBook:
             self.last_reentry_ts = time.time()
         elif action == 'sell' and side == 'yes':
             # Closing long position
-            if self.inventory.net_contracts > 0:
-                fees = fees_roundtrip(count, self.inventory.vwap_entry, price)
-                self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
+            # CRITICAL FIX: Remove conditional guard that was silently dropping sells
+            # Log state before processing for debugging
+            print(f"[{self.ticker}] Processing SELL fill: count={count} price=${price:.4f} | Current net_contracts={self.inventory.net_contracts}")
+            fees = fees_roundtrip(count, self.inventory.vwap_entry, price)
+            self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
         elif action == 'buy' and side == 'no':
             # Opening short position
             self._execute_fill(count, price, timestamp, 'short')
@@ -971,9 +973,11 @@ class MarketBook:
             self.last_reentry_ts = time.time()
         elif action == 'sell' and side == 'no':
             # Closing short position
-            if self.inventory.net_contracts < 0:
-                fees = fees_roundtrip(count, abs(self.inventory.vwap_entry), price)
-                self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
+            # CRITICAL FIX: Remove conditional guard that was silently dropping sells
+            # Log state before processing for debugging
+            print(f"[{self.ticker}] Processing SELL NO fill: count={count} price=${price:.4f} | Current net_contracts={self.inventory.net_contracts}")
+            fees = fees_roundtrip(count, abs(self.inventory.vwap_entry), price)
+            self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
 
         # Send fill event to portfolio
         await self.portfolio_q.put({
@@ -1015,6 +1019,10 @@ class MarketBook:
             size = (self.config.SIZE_PER_FILL if self.quote_state == QuoteState.FLAT
                     else self.config.PYRAMID_SIZE_PER_FILL)
             await self._update_quotes_with_exception(quote_bid, quote_ask, size)
+
+        # CRITICAL FIX: Mark fill as processed AFTER successful processing
+        # This prevents fills from being marked as processed if they fail validation or processing
+        self.orders.mark_processed(oid, fid)
 
     async def _update_quotes_with_exception(
         self,

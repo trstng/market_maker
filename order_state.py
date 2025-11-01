@@ -37,18 +37,29 @@ class OrderState:
         """
         Check if a fill has already been processed (idempotent).
 
+        CRITICAL FIX: Only checks, doesn't mark as processed.
+        Call mark_processed() AFTER successful processing.
+
         Args:
             order_id: Order ID from fill
             fill_id: Fill ID from fill
 
         Returns:
-            True if already processed, False otherwise (and marks as processed)
+            True if already processed, False otherwise
         """
         key = (order_id, fill_id)
-        if key in self.processed_fills:
-            return True
+        return key in self.processed_fills
+
+    def mark_processed(self, order_id: str, fill_id: str):
+        """
+        Mark a fill as processed (call AFTER successful processing).
+
+        Args:
+            order_id: Order ID from fill
+            fill_id: Fill ID from fill
+        """
+        key = (order_id, fill_id)
         self.processed_fills.add(key)
-        return False
 
     def register_order(self, client_order_id: str, order_details: Dict):
         """Register a placed order for tracking."""
