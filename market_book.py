@@ -378,14 +378,12 @@ class MarketBook:
                     # Next layer: step below anchor
                     desired_bid = entry_anchor - step * (layers + 1)
 
-                    # Price-selective gate (only buy below low_gate)
-                    low_gate, _ = self.get_entry_thresholds()
-                    if self.mid_ema <= low_gate and self.mid_ema <= desired_bid:
-                        bid = self.round_to_tick(min(desired_bid, self.mid_ema - self.config.BASE_SPREAD))
+                    # Place pyramiding bid (no price gates - matches backtest)
+                    bid = self.round_to_tick(min(desired_bid, self.mid_ema - self.config.BASE_SPREAD))
 
-                        # Never cross touch
-                        if self.best_ask is not None and bid >= self.best_ask:
-                            bid = self.round_to_tick(self.best_ask - self.config.TICK_C / 100)
+                    # Never cross touch
+                    if self.best_ask is not None and bid >= self.best_ask:
+                        bid = self.round_to_tick(self.best_ask - self.config.TICK_C / 100)
 
             return (bid, ask)
 
@@ -421,13 +419,11 @@ class MarketBook:
                     layers = max(0, abs(self.inventory.net_contracts) // self.config.PYRAMID_SIZE_PER_FILL)
                     desired_ask = entry_anchor + step * (layers + 1)
 
-                    # Price-selective gate (only sell above high_gate)
-                    _, high_gate = self.get_entry_thresholds()
-                    if self.mid_ema >= high_gate and self.mid_ema >= desired_ask:
-                        ask = self.round_to_tick(max(desired_ask, self.mid_ema + self.config.BASE_SPREAD))
+                    # Place pyramiding ask (no price gates - matches backtest)
+                    ask = self.round_to_tick(max(desired_ask, self.mid_ema + self.config.BASE_SPREAD))
 
-                        if self.best_bid is not None and ask <= self.best_bid:
-                            ask = self.round_to_tick(self.best_bid + self.config.TICK_C / 100)
+                    if self.best_bid is not None and ask <= self.best_bid:
+                        ask = self.round_to_tick(self.best_bid + self.config.TICK_C / 100)
 
             return (bid, ask)
 
