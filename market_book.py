@@ -16,7 +16,7 @@ from order_state import OrderState
 
 class QuoteState(Enum):
     """State machine for market making strategy"""
-    FLAT = "FLAT"  # No inventory, quote both sides in profitable zones
+    FLAT = "FLAT"  # No inventory, quote both sides (backtest logic)
     SKEW_LONG = "SKEW_LONG"  # Long inventory, ASK-only until flat
     SKEW_SHORT = "SKEW_SHORT"  # Short inventory, BID-only until flat
 
@@ -320,31 +320,22 @@ class MarketBook:
             self.last_state_change_ts = time.time()
 
         # ======================================================================
-        # FLAT Mode: Quote both sides in profitable zones
+        # FLAT Mode: Quote both sides (BACKTEST LOGIC - no price gates)
         # ======================================================================
         if self.quote_state == QuoteState.FLAT:
-            low_gate, high_gate = self.get_entry_thresholds()
             base_spread = self.config.BASE_SPREAD
 
-            can_buy = mid <= low_gate
-            can_sell = mid >= high_gate
+            # Backtest logic: Always quote both sides when flat
+            # quote_bid = mid_ema - base_spread
+            # quote_ask = mid_ema + base_spread
+            bid = self.round_to_tick(mid - base_spread)
+            ask = self.round_to_tick(mid + base_spread)
 
-            bid = None
-            ask = None
-
-            if can_buy:
-                # Place bid 1 tick inside mid (maker-only, never cross)
-                bid = self.round_to_tick(mid - base_spread)
-                # Ensure bid doesn't cross spread (if we have book data)
-                if self.best_ask is not None and bid >= self.best_ask:
-                    bid = self.round_to_tick(self.best_ask - self.config.TICK_C / 100)
-
-            if can_sell:
-                # Place ask 1 tick outside mid (maker-only, never cross)
-                ask = self.round_to_tick(mid + base_spread)
-                # Ensure ask doesn't cross spread (if we have book data)
-                if self.best_bid is not None and ask <= self.best_bid:
-                    ask = self.round_to_tick(self.best_bid + self.config.TICK_C / 100)
+            # Maker-only protection: never cross the spread
+            if self.best_ask is not None and bid >= self.best_ask:
+                bid = self.round_to_tick(self.best_ask - self.config.TICK_C / 100)
+            if self.best_bid is not None and ask <= self.best_bid:
+                ask = self.round_to_tick(self.best_bid + self.config.TICK_C / 100)
 
             return (bid, ask)
 
@@ -724,12 +715,13 @@ class MarketBook:
 
     def _should_replace(self, side: str, new_price: float) -> bool:
         """
-        NEW: Check if order should be replaced using hysteresis logic.
+        Check if order should be replaced using hysteresis logic (BACKTEST-MATCHING).
 
         Only replace if:
         - No active order exists, OR
-        - New price differs significantly from old price, OR
-        - Order is crossed/inside spread/displaced by ≥ HYSTERESIS_TICKS
+        - Order is crossed/inside spread, OR
+        - In FLAT mode: moved by ≥ HYSTERESIS_TICKS
+        - In SKEW mode: never replace for displacement (TP is VWAP-anchored)
 
         Args:
             side: 'bid' or 'ask'
@@ -745,14 +737,19 @@ class MarketBook:
 
         old_price = active['price']
 
-        # Always replace if price changed
-        if abs(new_price - old_price) >= (self.config.TICK_C / 100):
-            return True
-
-        # Check if existing order needs replacement due to market movement
+        # Always check if crossed/inside spread
         if self.crossed_or_far_from_touch(old_price, side):
             return True
 
+        # Calculate price movement in ticks
+        tick = self.config.TICK_C / 100
+        delta_ticks = abs(new_price - old_price) / tick
+
+        # FLAT mode: only replace if moved by HYSTERESIS_TICKS (stops constant requoting)
+        if self.quote_state == QuoteState.FLAT:
+            return delta_ticks >= self.config.HYSTERESIS_TICKS
+
+        # SKEW mode: never replace for displacement (TP stays VWAP-anchored)
         return False
 
     async def _place_or_replace(self, side: str, price: float, qty: int):
