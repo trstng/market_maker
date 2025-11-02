@@ -948,8 +948,8 @@ class MarketBook:
         old_state = self.quote_state
         net = self.inventory.net_contracts
 
-        # Determine new state
-        if net == 0:
+        # Determine new state (MUST match _compute_quotes logic!)
+        if abs(net) < self.config.NEUTRAL_ZONE_THRESHOLD:
             new_state = QuoteState.FLAT
         elif net > 0:
             new_state = QuoteState.SKEW_LONG
