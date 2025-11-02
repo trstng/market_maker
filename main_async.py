@@ -97,12 +97,15 @@ class AsyncBotConfig:
     CB_TIGHT_SPREAD_MULTIPLIER = 0.8  # Tighten thresholds by 20% when spread is 1 tick
 
     # Pyramiding controls (position accumulation)
-    ALLOW_PYRAMIDING = True
+    ALLOW_PYRAMIDING = False          # DISABLED to match backtest (backtest has NO pyramiding)
     PYRAMID_MAX_CONTRACTS = 20        # Match backtest cap
     PYRAMID_SIZE_PER_FILL = 2         # Contracts per layer (backtest shows qty=2)
     PYRAMID_STEP_C = 2                # Grid step in cents between layers
     PYRAMID_REENTRY_COOLDOWN_S = 8    # Seconds between re-entry fills
     PYRAMID_USE_VWAP_GRID = True      # True=grid from VWAP, False=from last fill
+
+    # Backtest-matching neutral zone
+    NEUTRAL_ZONE_THRESHOLD = 20       # Quote both sides when abs(net) < this (backtest uses 20)
 
     # ======================================================================
     # Paper Trading Guardrails & Safety Features

@@ -15,10 +15,10 @@ from order_state import OrderState
 
 
 class QuoteState(Enum):
-    """State machine for market making strategy"""
-    FLAT = "FLAT"  # No inventory, quote both sides (backtest logic)
-    SKEW_LONG = "SKEW_LONG"  # Long inventory, ASK-only until flat
-    SKEW_SHORT = "SKEW_SHORT"  # Short inventory, BID-only until flat
+    """State machine for market making strategy (matches backtest exactly)"""
+    FLAT = "FLAT"  # Neutral zone (abs(net) < NEUTRAL_ZONE_THRESHOLD), quote both sides
+    SKEW_LONG = "SKEW_LONG"  # Long inventory (net >= threshold), exit-only ASK
+    SKEW_SHORT = "SKEW_SHORT"  # Short inventory (net <= -threshold), exit-only BID
 
 
 def make_coid(strategy_id: str, ticker: str) -> str:
@@ -306,13 +306,13 @@ class MarketBook:
 
         net = self.inventory.net_contracts
 
-        # Determine state from inventory
-        if net == 0:
-            current_state = QuoteState.FLAT
+        # Determine state from inventory (BACKTEST LOGIC: neutral zone threshold)
+        if abs(net) < self.config.NEUTRAL_ZONE_THRESHOLD:
+            current_state = QuoteState.FLAT  # Quote both sides when abs(net) < 20 (backtest behavior)
         elif net > 0:
-            current_state = QuoteState.SKEW_LONG
+            current_state = QuoteState.SKEW_LONG  # Exit-only when net >= 20
         else:
-            current_state = QuoteState.SKEW_SHORT
+            current_state = QuoteState.SKEW_SHORT  # Exit-only when net <= -20
 
         # Update state if changed
         if current_state != self.quote_state:
@@ -359,31 +359,8 @@ class MarketBook:
             if self.best_bid is not None and ask <= self.best_bid:
                 ask = self.round_to_tick(self.best_bid + self.config.TICK_C / 100)
 
-            # PYRAMIDING RE-ENTRY on bid side (keep existing logic)
+            # NO PYRAMIDING - backtest only quotes exit side when holding inventory
             bid = None
-            if (self.config.ALLOW_PYRAMIDING and
-                abs(self.inventory.net_contracts) < self.config.PYRAMID_MAX_CONTRACTS):
-
-                # Cooldown gate
-                if time.time() - self.last_reentry_ts >= self.config.PYRAMID_REENTRY_COOLDOWN_S:
-                    step = (self.config.PYRAMID_STEP_C / 100)
-                    vwap = self.inventory.vwap_entry or mid
-
-                    # Grid anchor: VWAP or last fill price
-                    entry_anchor = vwap if self.config.PYRAMID_USE_VWAP_GRID else (self.last_entry_price or vwap)
-
-                    # Calculate layer number (net=2→layer 0, net=4→layer 1, etc.)
-                    layers = max(0, abs(self.inventory.net_contracts) // self.config.PYRAMID_SIZE_PER_FILL)
-
-                    # Next layer: step below anchor
-                    desired_bid = entry_anchor - step * (layers + 1)
-
-                    # Place pyramiding bid (no price gates - matches backtest)
-                    bid = self.round_to_tick(min(desired_bid, self.mid_ema - self.config.BASE_SPREAD))
-
-                    # Never cross touch
-                    if self.best_ask is not None and bid >= self.best_ask:
-                        bid = self.round_to_tick(self.best_ask - self.config.TICK_C / 100)
 
             return (bid, ask)
 
@@ -407,23 +384,8 @@ class MarketBook:
             if self.best_ask is not None and bid >= self.best_ask:
                 bid = self.round_to_tick(self.best_ask - self.config.TICK_C / 100)
 
-            # PYRAMIDING RE-ENTRY on ask side (keep existing logic)
+            # NO PYRAMIDING - backtest only quotes exit side when holding inventory
             ask = None
-            if (self.config.ALLOW_PYRAMIDING and
-                abs(self.inventory.net_contracts) < self.config.PYRAMID_MAX_CONTRACTS):
-
-                if time.time() - self.last_reentry_ts >= self.config.PYRAMID_REENTRY_COOLDOWN_S:
-                    step = (self.config.PYRAMID_STEP_C / 100)
-                    vwap = self.inventory.vwap_entry or mid
-                    entry_anchor = vwap if self.config.PYRAMID_USE_VWAP_GRID else (self.last_entry_price or vwap)
-                    layers = max(0, abs(self.inventory.net_contracts) // self.config.PYRAMID_SIZE_PER_FILL)
-                    desired_ask = entry_anchor + step * (layers + 1)
-
-                    # Place pyramiding ask (no price gates - matches backtest)
-                    ask = self.round_to_tick(max(desired_ask, self.mid_ema + self.config.BASE_SPREAD))
-
-                    if self.best_bid is not None and ask <= self.best_bid:
-                        ask = self.round_to_tick(self.best_bid + self.config.TICK_C / 100)
 
             return (bid, ask)
 
