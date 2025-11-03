@@ -380,7 +380,7 @@ class MultiMarketMaker:
         if not coid:
             ticker = fill.get('ticker')
             if ticker and ticker in self.books:
-                print(f"⚠️  Processing legacy fill (no coid) for {ticker}")
+                # Legacy fill log removed for cleaner output
                 await self.books[ticker].process_fill(fill)
                 return
 

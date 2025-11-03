@@ -80,7 +80,7 @@ class AsyncBotConfig:
     }
 
     # Hysteresis & cooldown
-    HYSTERESIS_TICKS = 2  # Minimum tick displacement before replacing order
+    HYSTERESIS_TICKS = 4  # Minimum tick displacement before replacing order
     BASE_COOLDOWN_FLAT_MS = 300  # Cooldown when flat (ms)
     BASE_COOLDOWN_SKEW_MS = 2000  # Base cooldown when holding inventory (ms)
     COOLDOWN_PER_CONTRACT_MS = 50  # Additional cooldown per contract held

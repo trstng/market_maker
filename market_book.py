@@ -183,19 +183,20 @@ class MarketBook:
             else:  # SKEW_SHORT
                 tp = vwap - tp_offset_dollars
 
-        event = {
-            "ts": time.time(),
-            "market": self.ticker,
-            "state": self.quote_state.value,
-            "net": self.inventory.net_contracts,
-            "vwap": round(vwap, 4) if vwap else None,
-            "tp": round(tp, 4) if tp else None,
-            "best_bid": round(self.best_bid, 4) if self.best_bid else None,
-            "best_ask": round(self.best_ask, 4) if self.best_ask else None,
-            "action": action,
-            **kwargs
-        }
-        print(json.dumps(event))
+        # Structured logs removed for cleaner output
+        # event = {
+        #     "ts": time.time(),
+        #     "market": self.ticker,
+        #     "state": self.quote_state.value,
+        #     "net": self.inventory.net_contracts,
+        #     "vwap": round(vwap, 4) if vwap else None,
+        #     "tp": round(tp, 4) if tp else None,
+        #     "best_bid": round(self.best_bid, 4) if self.best_bid else None,
+        #     "best_ask": round(self.best_ask, 4) if self.best_ask else None,
+        #     "action": action,
+        #     **kwargs
+        # }
+        # print(json.dumps(event))
 
     async def run(self):
         """Main event loop - processes incoming market data."""
@@ -581,13 +582,13 @@ class MarketBook:
         if n30 >= tier2_30 or n60 >= tier2_60:
             self.circuit_brake_until = now + self.config.CB_HARD_BRAKE_S
             self.circuit_brake_tier = "hard"
-            print(f"[{self.ticker}] 🚨 CIRCUIT BREAKER: HARD BRAKE ({n30}/30s, {n60}/60s)")
+            # Circuit breaker log removed for cleaner output
             return True, "hard"
 
         if n30 >= tier1_30 or n60 >= tier1_60:
             self.circuit_brake_until = now + self.config.CB_SOFT_BRAKE_S
             self.circuit_brake_tier = "soft"
-            print(f"[{self.ticker}] ⚠️  CIRCUIT BREAKER: SOFT BRAKE ({n30}/30s, {n60}/60s)")
+            # Circuit breaker log removed for cleaner output
             return True, "soft"
 
         self.circuit_brake_tier = "none"
@@ -722,7 +723,7 @@ class MarketBook:
         # NEW: Tick-snapping validation
         snapped_price = self.round_to_tick(price)
         if abs(price - snapped_price) > 1e-6:  # Allow small float precision errors
-            print(f"[{self.ticker}] ⚠️  Price {price:.4f} not tick-snapped, using {snapped_price:.4f}")
+            # Price adjustment log removed for cleaner output
             price = snapped_price
 
         # Cancel existing order if present
@@ -744,7 +745,7 @@ class MarketBook:
 
         # Kill switch: Disable all new quotes
         if os.getenv('DISABLE_NEW_QUOTES', 'false').lower() == 'true':
-            print(f"[{self.ticker}] Kill switch active - no new quotes")
+            # Kill switch log removed for cleaner output
             return
 
         # Inventory limit check
@@ -860,23 +861,23 @@ class MarketBook:
 
         # Validate: must belong to this strategy
         if coid and not coid.startswith('MMv2:'):
-            print(f"[{self.ticker}] ❌ Fill rejected: foreign strategy coid={coid}")
+            # Fill rejection log removed for cleaner output
             return  # Foreign strategy fill
 
         # Validate ticker
         if ticker != self.ticker:
-            print(f"[{self.ticker}] ❌ Fill rejected: wrong ticker {ticker}")
+            # Fill rejection log removed for cleaner output
             return
         if not oid:
-            print(f"[{self.ticker}] ❌ Fill rejected: missing order_id")
+            # Fill rejection log removed for cleaner output
             return
         if not fid:
-            print(f"[{self.ticker}] ❌ Fill rejected: missing fill_id")
+            # Fill rejection log removed for cleaner output
             return
 
         # Check if already processed (idempotent)
         if self.orders.already_processed(oid, fid):
-            print(f"[{self.ticker}] ⏭️  Fill {fid[:8]} already processed, skipping")
+            # Duplicate fill log removed for cleaner output
             return
 
         # Extract fill details
@@ -886,7 +887,7 @@ class MarketBook:
         price_cents = fill.get('yes_price') if side == 'yes' else fill.get('no_price')
 
         if not all([side, action, count, price_cents]):
-            print(f"[{self.ticker}] ❌ Fill rejected: missing required fields side={side} action={action} count={count} price_cents={price_cents}")
+            # Fill rejection log removed for cleaner output
             return
 
         price = price_cents / 100
@@ -916,8 +917,7 @@ class MarketBook:
         elif action == 'sell' and side == 'yes':
             # Closing long position
             # CRITICAL FIX: Remove conditional guard that was silently dropping sells
-            # Log state before processing for debugging
-            print(f"[{self.ticker}] Processing SELL fill: count={count} price=${price:.4f} | Current net_contracts={self.inventory.net_contracts}")
+            # Processing log removed for cleaner output
             fees = fees_roundtrip(count, self.inventory.vwap_entry, price)
             self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
         elif action == 'buy' and side == 'no':
@@ -929,8 +929,7 @@ class MarketBook:
         elif action == 'sell' and side == 'no':
             # Closing short position
             # CRITICAL FIX: Remove conditional guard that was silently dropping sells
-            # Log state before processing for debugging
-            print(f"[{self.ticker}] Processing SELL NO fill: count={count} price=${price:.4f} | Current net_contracts={self.inventory.net_contracts}")
+            # Processing log removed for cleaner output
             fees = fees_roundtrip(count, abs(self.inventory.vwap_entry), price)
             self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
 
@@ -961,7 +960,7 @@ class MarketBook:
             self.quote_state = new_state
             self.last_state_change_ts = time.time()
 
-            print(f"[{self.ticker}] State transition: {old_state.value} → {new_state.value}")
+            # State transition log removed for cleaner output
 
             # Log state change with telemetry
             self._log_event("state_change",
