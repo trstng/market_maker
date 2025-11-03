@@ -915,11 +915,16 @@ class MarketBook:
             self.last_entry_price = price
             self.last_reentry_ts = time.time()
         elif action == 'sell' and side == 'yes':
-            # Closing long position
-            # CRITICAL FIX: Remove conditional guard that was silently dropping sells
-            # Processing log removed for cleaner output
-            fees = fees_roundtrip(count, self.inventory.vwap_entry, price)
-            self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
+            # SELL YES: check if closing long or opening short
+            if self.inventory.net_contracts > 0:
+                # Have YES position to sell - closing long
+                fees = fees_roundtrip(count, self.inventory.vwap_entry, price)
+                self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
+            else:
+                # Don't have YES position - selling YES means opening short (equivalent to buying NO)
+                self._execute_fill(count, price, timestamp, 'short')
+                self.last_entry_price = price
+                self.last_reentry_ts = time.time()
         elif action == 'buy' and side == 'no':
             # Opening short position
             self._execute_fill(count, price, timestamp, 'short')
@@ -927,11 +932,16 @@ class MarketBook:
             self.last_entry_price = price
             self.last_reentry_ts = time.time()
         elif action == 'sell' and side == 'no':
-            # Closing short position
-            # CRITICAL FIX: Remove conditional guard that was silently dropping sells
-            # Processing log removed for cleaner output
-            fees = fees_roundtrip(count, abs(self.inventory.vwap_entry), price)
-            self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
+            # SELL NO: check if closing short or opening long
+            if self.inventory.net_contracts < 0:
+                # Have NO position to sell - closing short
+                fees = fees_roundtrip(count, abs(self.inventory.vwap_entry), price)
+                self._realize_position(count, price, timestamp, fees, 'fill_from_exchange')
+            else:
+                # Don't have NO position - selling NO means opening long (equivalent to buying YES)
+                self._execute_fill(count, price, timestamp, 'long')
+                self.last_entry_price = price
+                self.last_reentry_ts = time.time()
 
         # Send fill event to portfolio
         await self.portfolio_q.put({
