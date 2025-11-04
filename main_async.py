@@ -147,7 +147,7 @@ async def main():
         return
 
     print(f"\n📊 Configuration:")
-    print(f"   Series: {config.SERIES_TICKER}")
+    print(f"   Series: NHL + NBA")
     print(f"   Base Spread: {config.BASE_SPREAD}")
     print(f"   Size Per Fill: {config.SIZE_PER_FILL}")
     print(f"   Max Markets: {config.MAX_MARKETS_TO_TRADE}")
@@ -163,21 +163,37 @@ async def main():
     )
 
     try:
-        # Discover all markets for today
-        tickers = await discover_today_markets(
+        # Discover NHL markets
+        print("🏒 Discovering NHL markets...")
+        nhl_tickers = await discover_today_markets(
             api=temp_api,
-            series=config.SERIES_TICKER,
+            series="KXNHLGAME",
             limit=100,
-            top_k=config.MAX_MARKETS_TO_TRADE,
-            min_volume=0  # No minimum volume filter
+            top_k=config.MAX_MARKETS_TO_TRADE // 2,  # Split capacity
+            min_volume=0
         )
+        print(f"   Found {len(nhl_tickers)} NHL markets")
+
+        # Discover NBA markets
+        print("🏀 Discovering NBA markets...")
+        nba_tickers = await discover_today_markets(
+            api=temp_api,
+            series="KXNBAGAME",
+            limit=100,
+            top_k=config.MAX_MARKETS_TO_TRADE // 2,  # Split capacity
+            min_volume=0
+        )
+        print(f"   Found {len(nba_tickers)} NBA markets")
+
+        # Combine both
+        tickers = nhl_tickers + nba_tickers
 
         if not tickers:
             print("❌ No markets found for today. Exiting.")
             await temp_api.close()
             return
 
-        print(f"\n✅ Will trade {len(tickers)} markets")
+        print(f"\n✅ Will trade {len(tickers)} markets ({len(nhl_tickers)} NHL + {len(nba_tickers)} NBA)")
 
     finally:
         await temp_api.close()
