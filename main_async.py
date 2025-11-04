@@ -105,7 +105,7 @@ class AsyncBotConfig:
     PYRAMID_USE_VWAP_GRID = True      # True=grid from VWAP, False=from last fill
 
     # Backtest-matching neutral zone
-    NEUTRAL_ZONE_THRESHOLD = 20       # Quote both sides when abs(net) < this (backtest uses 20)
+    NEUTRAL_ZONE_THRESHOLD = 4 * SIZE_PER_FILL  # Quote both sides when abs(net) < this (4x size_per_fill)
 
     # Extreme price exit gates (flatten position to avoid holding into settlement)
     EXIT_PRICE_LOW = 0.05             # Flatten if mid drops below 5¢

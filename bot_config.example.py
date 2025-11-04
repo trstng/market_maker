@@ -152,8 +152,8 @@ class BotConfig:
     # ========================================================================
 
     # Inventory skew threshold
-    # Start adjusting quotes when |net_contracts| exceeds this
-    INVENTORY_SKEW_THRESHOLD = 20
+    # Start adjusting quotes when |net_contracts| exceeds this (4x SIZE_PER_FILL)
+    INVENTORY_SKEW_THRESHOLD = 4 * SIZE_PER_FILL
 
     # Maximum inventory cap (hard limit)
     # Bot will stop quoting if exceeded

@@ -83,6 +83,9 @@ class BotConfig:
     PYRAMID_USE_VWAP_GRID = True      # True=grid from VWAP, False=from last fill
     TICK_C = 1                        # Tick size in cents
 
+    # Neutral zone threshold (exit-only mode when |net| exceeds this)
+    NEUTRAL_ZONE_THRESHOLD = 4 * SIZE_PER_FILL  # Quote both sides when abs(net) < this
+
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -309,7 +312,7 @@ class HybridRiskPolicy:
 
     def get_inventory_skew(self, net_contracts: int, size_cap: int = 100) -> float:
         """Calculate quote skew based on inventory position."""
-        if abs(net_contracts) < 20:
+        if abs(net_contracts) < self.config.NEUTRAL_ZONE_THRESHOLD:
             return 0.0  # Neutral
 
         # Sigmoid-like skew: more extreme as we approach limits
@@ -781,17 +784,17 @@ class LiveMarketMaker:
         quote_bid = None
         quote_ask = None
 
-        # If neutral inventory (|net| < 20), quote both sides
-        if abs(self.inventory.net_contracts) < 20:
+        # If neutral inventory (|net| < threshold), quote both sides
+        if abs(self.inventory.net_contracts) < self.config.NEUTRAL_ZONE_THRESHOLD:
             quote_bid = self.mid_ema - base_spread
             quote_ask = self.mid_ema + base_spread
 
-        # If long inventory (net > 20), prefer to sell
-        elif self.inventory.net_contracts > 20:
+        # If long inventory (net >= threshold), prefer to sell
+        elif self.inventory.net_contracts >= self.config.NEUTRAL_ZONE_THRESHOLD:
             quote_ask = self.mid_ema + base_spread * (1 + abs(skew))
 
-        # If short inventory (net < -20), prefer to buy
-        elif self.inventory.net_contracts < -20:
+        # If short inventory (net <= -threshold), prefer to buy
+        elif self.inventory.net_contracts <= -self.config.NEUTRAL_ZONE_THRESHOLD:
             quote_bid = self.mid_ema - base_spread * (1 + abs(skew))
 
         # Update orders on exchange
