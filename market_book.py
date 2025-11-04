@@ -862,6 +862,34 @@ class MarketBook:
             ts: Timestamp
             reason: Trigger reason
         """
+        # Cancel all active orders first
+        await self._cancel_both()
+
+        # Place MARKET order to exit position on Kalshi
+        net = self.inventory.net_contracts
+        if net != 0:
+            print(f"[{self.ticker}] 🚨 FLATTEN: Placing market order to exit {net:+d} contracts")
+
+            if net > 0:
+                # Exit long with market SELL (price=1¢ ensures immediate fill)
+                await self.api.place_order(
+                    self.ticker,
+                    side="yes",
+                    action="sell",
+                    count=abs(net),
+                    price_cents=1  # Market order: willing to sell at any price
+                )
+            else:
+                # Exit short with market BUY (price=99¢ ensures immediate fill)
+                await self.api.place_order(
+                    self.ticker,
+                    side="yes",
+                    action="buy",
+                    count=abs(net),
+                    price_cents=99  # Market order: willing to buy at any price
+                )
+
+        # Update internal state
         realizations = self.inventory.flatten_all(exit_px, ts, fees=0.0)
         total_pnl = sum(r['pnl'] for r in realizations)
 
