@@ -865,28 +865,48 @@ class MarketBook:
         # Cancel all active orders first
         await self._cancel_both()
 
-        # Place MARKET order to exit position on Kalshi
+        # Place order to exit position on Kalshi at best available price
         net = self.inventory.net_contracts
         if net != 0:
-            print(f"[{self.ticker}] 🚨 FLATTEN: Placing market order to exit {net:+d} contracts")
-
             if net > 0:
-                # Exit long with market SELL (price=1¢ ensures immediate fill)
+                # Exit long: SELL at best bid (take liquidity, immediate fill)
+                if self.best_bid is not None:
+                    exit_price_cents = int(self.best_bid * 100)
+                elif self.mid_ema is not None:
+                    # Fallback: cross mid by 1 tick
+                    exit_price_cents = max(1, int(self.mid_ema * 100) - 1)
+                else:
+                    # Emergency fallback
+                    exit_price_cents = 50
+
+                print(f"[{self.ticker}] 🚨 FLATTEN: SELL {abs(net)} @ {exit_price_cents}¢ (best_bid)")
+
                 await self.api.place_order(
                     self.ticker,
                     side="yes",
                     action="sell",
                     count=abs(net),
-                    price_cents=1  # Market order: willing to sell at any price
+                    price_cents=exit_price_cents
                 )
             else:
-                # Exit short with market BUY (price=99¢ ensures immediate fill)
+                # Exit short: BUY at best ask (take liquidity, immediate fill)
+                if self.best_ask is not None:
+                    exit_price_cents = int(self.best_ask * 100)
+                elif self.mid_ema is not None:
+                    # Fallback: cross mid by 1 tick
+                    exit_price_cents = min(99, int(self.mid_ema * 100) + 1)
+                else:
+                    # Emergency fallback
+                    exit_price_cents = 50
+
+                print(f"[{self.ticker}] 🚨 FLATTEN: BUY {abs(net)} @ {exit_price_cents}¢ (best_ask)")
+
                 await self.api.place_order(
                     self.ticker,
                     side="yes",
                     action="buy",
                     count=abs(net),
-                    price_cents=99  # Market order: willing to buy at any price
+                    price_cents=exit_price_cents
                 )
 
         # Update internal state
