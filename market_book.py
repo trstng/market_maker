@@ -970,14 +970,18 @@ class MarketBook:
                 self.last_entry_price = price
                 self.last_reentry_ts = time.time()
         elif action == 'buy' and side == 'no':
-            # BUY NO: check if closing long or opening short
+            # BUY NO: check if closing short, closing long, or opening short
             yes_price = 1.0 - price
-            if self.inventory.net_contracts > 0:
-                # Have YES position - BUY NO closes it
+            if self.inventory.net_contracts < 0:
+                # Have SHORT - BUY NO closes short (equivalent to BUY YES)
+                fees = fees_roundtrip(count, abs(self.inventory.vwap_entry), yes_price)
+                self._realize_position(count, yes_price, timestamp, fees, 'fill_from_exchange')
+            elif self.inventory.net_contracts > 0:
+                # Have LONG YES - BUY NO closes it (offsets YES position)
                 fees = fees_roundtrip(count, self.inventory.vwap_entry, yes_price)
                 self._realize_position(count, yes_price, timestamp, fees, 'fill_from_exchange')
             else:
-                # Opening short position (convert to YES price for tracking)
+                # FLAT - BUY NO opens SHORT (equivalent to SELL YES)
                 self._execute_fill(count, yes_price, timestamp, 'short')
                 # Track for pyramiding re-entry cooldown
                 self.last_entry_price = yes_price
@@ -986,16 +990,17 @@ class MarketBook:
             # SELL NO: Convert NO price to YES price for consistent tracking
             yes_price = 1.0 - price
             if self.inventory.net_contracts > 0:
-                # Have YES position - SELL NO closes long (selling YES reported as NO side)
+                # Have LONG YES - SELL NO closes it (offsets YES position)
                 fees = fees_roundtrip(count, self.inventory.vwap_entry, yes_price)
                 self._realize_position(count, yes_price, timestamp, fees, 'fill_from_exchange')
             elif self.inventory.net_contracts < 0:
-                # Have NO position - SELL NO closes short
-                fees = fees_roundtrip(count, abs(self.inventory.vwap_entry), yes_price)
-                self._realize_position(count, yes_price, timestamp, fees, 'fill_from_exchange')
+                # Have SHORT - SELL NO adds to short (selling more NO you don't have)
+                self._execute_fill(count, yes_price, timestamp, 'short')
+                self.last_entry_price = yes_price
+                self.last_reentry_ts = time.time()
             else:
-                # Flat - SELL NO opens long (selling NO you don't have)
-                self._execute_fill(count, yes_price, timestamp, 'long')
+                # FLAT - SELL NO opens SHORT (not long! you're selling NO you don't have)
+                self._execute_fill(count, yes_price, timestamp, 'short')
                 self.last_entry_price = yes_price
                 self.last_reentry_ts = time.time()
 
