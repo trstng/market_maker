@@ -253,17 +253,25 @@ class MarketBook:
             # Check if we hit extreme prices
             if (self.mid_ema <= self.config.EXIT_PRICE_LOW or
                 self.mid_ema >= self.config.EXIT_PRICE_HIGH):
-                if self.inventory.net_contracts != 0 and not self.extreme_price_exit:
-                    # First time hitting extreme price with position - flatten
-                    reason = f"EXTREME_PRICE_{self.mid_ema:.4f}"
-                    print(f"[{self.ticker}] 🚨 EXTREME PRICE EXIT: Mid={self.mid_ema:.2f} | Flattening {self.inventory.net_contracts:+d} @ market")
-                    await self._flatten(self.mid_ema, ts, reason)
-                    await self._cancel_both()
+
+                if not self.extreme_price_exit:
+                    # First time hitting extreme price - flatten if have position
+                    if self.inventory.net_contracts != 0:
+                        reason = f"EXTREME_PRICE_{self.mid_ema:.4f}"
+                        print(f"[{self.ticker}] 🚨 EXTREME PRICE EXIT: Mid={self.mid_ema:.2f} | Flattening {self.inventory.net_contracts:+d} @ market")
+                        await self._flatten(self.mid_ema, ts, reason)
+                        await self._cancel_both()
+                    # Set flag and stop quoting (even if flat)
                     self.extreme_price_exit = True
                     return
-                elif self.extreme_price_exit:
-                    # Already flattened, stay out
-                    return
+                else:
+                    # Already flagged - check for unexpected position
+                    if self.inventory.net_contracts != 0:
+                        reason = f"EXTREME_PRICE_REENTRY_{self.mid_ema:.4f}"
+                        print(f"[{self.ticker}] 🚨 RE-FLATTEN: Mid={self.mid_ema:.2f} | Flattening {self.inventory.net_contracts:+d} @ market")
+                        await self._flatten(self.mid_ema, ts, reason)
+                        await self._cancel_both()
+                    return  # Stay out
 
             # Check if price has normalized - resume quoting
             elif self.extreme_price_exit:
@@ -271,9 +279,9 @@ class MarketBook:
                     self.mid_ema <= self.config.EXIT_RESUME_HIGH):
                     print(f"[{self.ticker}] ✅ Price normalized ({self.mid_ema:.2f}) - resuming quoting")
                     self.extreme_price_exit = False
+                    # Continue to normal quoting
                 else:
-                    # Still in danger zone, don't quote
-                    return
+                    return  # Still in 5-10¢ or 90-95¢ dead zone, stay out
 
         # ======================================================================
         # ONLY Exit Logic: DWE=500 + MAE Failsafe (matches backtest)
