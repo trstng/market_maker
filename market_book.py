@@ -92,6 +92,7 @@ class MarketBook:
         live_trading = os.getenv('LIVE_TRADING_ENABLED', 'true').lower() == 'true'
         self.quoting_enabled = live_trading
         self.running = True
+        self.extreme_price_exit = False  # Set when mid hits extreme price (< 5¢ or > 95¢)
 
         if not live_trading:
             print(f"[{self.ticker}] 📄 PAPER MODE - No real orders will be placed")
@@ -244,6 +245,35 @@ class MarketBook:
             self.mid_ema = px
         else:
             self.mid_ema = alpha * px + (1 - alpha) * self.mid_ema
+
+        # ======================================================================
+        # Extreme Price Exit Gates (< 5¢ or > 95¢)
+        # ======================================================================
+        if hasattr(self.config, 'EXIT_PRICE_LOW') and hasattr(self.config, 'EXIT_PRICE_HIGH'):
+            # Check if we hit extreme prices
+            if (self.mid_ema <= self.config.EXIT_PRICE_LOW or
+                self.mid_ema >= self.config.EXIT_PRICE_HIGH):
+                if self.inventory.net_contracts != 0 and not self.extreme_price_exit:
+                    # First time hitting extreme price with position - flatten
+                    reason = f"EXTREME_PRICE_{self.mid_ema:.4f}"
+                    print(f"[{self.ticker}] 🚨 EXTREME PRICE EXIT: Mid={self.mid_ema:.2f} | Flattening {self.inventory.net_contracts:+d} @ market")
+                    await self._flatten(self.mid_ema, ts, reason)
+                    await self._cancel_both()
+                    self.extreme_price_exit = True
+                    return
+                elif self.extreme_price_exit:
+                    # Already flattened, stay out
+                    return
+
+            # Check if price has normalized - resume quoting
+            elif self.extreme_price_exit:
+                if (self.mid_ema >= self.config.EXIT_RESUME_LOW and
+                    self.mid_ema <= self.config.EXIT_RESUME_HIGH):
+                    print(f"[{self.ticker}] ✅ Price normalized ({self.mid_ema:.2f}) - resuming quoting")
+                    self.extreme_price_exit = False
+                else:
+                    # Still in danger zone, don't quote
+                    return
 
         # ======================================================================
         # ONLY Exit Logic: DWE=500 + MAE Failsafe (matches backtest)

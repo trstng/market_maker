@@ -107,6 +107,12 @@ class AsyncBotConfig:
     # Backtest-matching neutral zone
     NEUTRAL_ZONE_THRESHOLD = 20       # Quote both sides when abs(net) < this (backtest uses 20)
 
+    # Extreme price exit gates (flatten position to avoid holding into settlement)
+    EXIT_PRICE_LOW = 0.05             # Flatten if mid drops below 5¢
+    EXIT_PRICE_HIGH = 0.95            # Flatten if mid rises above 95¢
+    EXIT_RESUME_LOW = 0.10            # Resume quoting when mid rises above 10¢
+    EXIT_RESUME_HIGH = 0.90           # Resume quoting when mid drops below 90¢
+
     # ======================================================================
     # Paper Trading Guardrails & Safety Features
     # ======================================================================
