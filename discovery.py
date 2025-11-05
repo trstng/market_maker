@@ -42,7 +42,7 @@ async def discover_today_markets(
     print(f"📊 Found {len(markets)} open markets")
 
     # Filter for today's date (matches ticker format: KXNHLGAME-25OCT27...)
-    today_str = datetime.now().strftime("%y%b%d").upper()  # e.g., "25NOV04"
+    today_str = "25NOV04"  # HARDCODED: Force Nov 4th games
     print(f"📅 Filtering for today: {today_str}")
 
     todays_markets = [
